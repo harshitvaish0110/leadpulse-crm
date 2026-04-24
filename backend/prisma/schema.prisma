@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  SALES
+}
+
+enum Source {
+  ORGANIC
+  OUTBOUND
+  REFERRAL
+}
+
+enum Status {
+  NEW
+  CONTACTED
+  QUALIFIED
+  LOST
+  WON
+}
+
+enum InteractionType {
+  EMAIL
+  CALL
+  MEETING
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+}
+
+model Lead {
+  id              String        @id @default(uuid())
+  name            String
+  email           String        @unique
+  companyName     String
+  industry        String
+  companySize     Int
+  source          Source
+  status          Status
+  conversionScore Float         @default(0)
+  lastContactedAt DateTime?
+  interactions    Interaction[]
+}
+
+model Interaction {
+  id             String          @id @default(uuid())
+  lead           Lead            @relation(fields: [leadId], references: [id])
+  leadId         String
+  type           InteractionType
+  notes          String          @db.Text
+  sentimentScore Float
+  createdAt      DateTime        @default(now())
+}
