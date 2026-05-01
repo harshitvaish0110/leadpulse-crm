@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: leadpulse_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: leadpulse_db
+      POSTGRES_USER: leadpulse
+      POSTGRES_PASSWORD: leadpulse_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leadpulse -d leadpulse_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: leadpulse_server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    command: npm run dev
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: leadpulse_ml
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./ml-service:/app
+    command: python app.py
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: leadpulse_client
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    env_file: .env
+    depends_on:
+      - server
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    command: npm run dev -- --host
+
+volumes:
+  postgres_data:

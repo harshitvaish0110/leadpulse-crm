@@ -1,6 +1,44 @@
+# Dependencies
 node_modules/
+
+# Environment variables
 .env
-__pycache__/
-venv/
-.venv/
+.env.local
+.env.*.local
+
+# Build output
 dist/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+*.pkl
+
+# ML model artifacts
+ml-service/models/*.pkl
+ml-service/models/*.joblib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Prisma
+server/prisma/migrations/**/migration_lock.toml
