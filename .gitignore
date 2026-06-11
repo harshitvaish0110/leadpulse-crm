@@ -42,3 +42,6 @@ npm-debug.log*
 
 # Prisma
 server/prisma/migrations/**/migration_lock.toml
+
+# Project Instructions
+leadpulse_agent.md

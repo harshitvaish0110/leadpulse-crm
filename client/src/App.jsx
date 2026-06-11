@@ -1,122 +1,66 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'react-hot-toast';
+import PrivateRoute from './components/layout/PrivateRoute';
+import AppShell from './components/layout/AppShell';
 
-function App() {
-  const [count, setCount] = useState(0)
+// Auth pages
+import Login from './pages/auth/Login';
+import Register from './pages/auth/Register';
 
+// App pages (import all 15)
+import Dashboard from './pages/Dashboard';
+import ContactsList from './pages/contacts/ContactsList';
+import ContactDetail from './pages/contacts/ContactDetail';
+import CompaniesList from './pages/companies/CompaniesList';
+import CompanyDetail from './pages/companies/CompanyDetail';
+import DealsPipeline from './pages/deals/DealsPipeline';
+import DealDetail from './pages/deals/DealDetail';
+import Activities from './pages/Activities';
+import Tasks from './pages/Tasks';
+import Analytics from './pages/Analytics';
+import AIAssistant from './pages/AIAssistant';
+import GeneralSettings from './pages/settings/GeneralSettings';
+import UsersSettings from './pages/settings/UsersSettings';
+import IntegrationsSettings from './pages/settings/IntegrationsSettings';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 30 * 1000, retry: 1 },
+  },
+});
+
+export default function App() {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login"    element={<Login />} />
+          <Route path="/register" element={<Register />} />
 
-      <div className="ticks"></div>
+          <Route element={<PrivateRoute />}>
+            <Route element={<AppShell />}>
+              <Route path="/dashboard"         element={<Dashboard />} />
+              <Route path="/contacts"          element={<ContactsList />} />
+              <Route path="/contacts/:id"      element={<ContactDetail />} />
+              <Route path="/companies"         element={<CompaniesList />} />
+              <Route path="/companies/:id"     element={<CompanyDetail />} />
+              <Route path="/deals"             element={<DealsPipeline />} />
+              <Route path="/deals/:id"         element={<DealDetail />} />
+              <Route path="/activities"        element={<Activities />} />
+              <Route path="/tasks"             element={<Tasks />} />
+              <Route path="/analytics"         element={<Analytics />} />
+              <Route path="/ai-assistant"      element={<AIAssistant />} />
+              <Route path="/settings/general"       element={<GeneralSettings />} />
+              <Route path="/settings/users"         element={<UsersSettings />} />
+              <Route path="/settings/integrations"  element={<IntegrationsSettings />} />
+            </Route>
+          </Route>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </BrowserRouter>
+      <Toaster position="top-right" />
+    </QueryClientProvider>
+  );
 }
-
-export default App
