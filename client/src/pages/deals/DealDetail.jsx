@@ -17,6 +17,7 @@ import Skeleton from '../../components/ui/Skeleton';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import EmptyState from '../../components/ui/EmptyState';
+import DealSummaryPanel from '../../components/ai/DealSummaryPanel';
 import toast from 'react-hot-toast';
 
 const STAGES = ['LEAD','CONTACTED','DEMO','PROPOSAL','NEGOTIATION','CLOSED_WON','CLOSED_LOST'];
@@ -230,6 +231,9 @@ export default function DealDetail() {
               onChange={e => handleNotesChange(e.target.value)}
             />
           </div>
+
+          {/* AI Deal Briefing */}
+          <DealSummaryPanel dealId={id} />
         </div>
 
         {/* RIGHT — Activity & Timeline (60%) */}

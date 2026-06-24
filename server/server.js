@@ -41,8 +41,9 @@ async function bootstrap() {
     transports: ['websocket', 'polling'],
   });
 
-  // Attach io to app so controllers can emit events
+  // Attach io to app and globally so jobs can emit events
   app.set('io', io);
+  global.io = io;
 
   io.on('connection', (socket) => {
     const clientId = socket.handshake.query?.userId ?? socket.id;
@@ -64,6 +65,9 @@ async function bootstrap() {
     console.log(`\n🚀  LeadPulse server running at http://localhost:${PORT}`);
     console.log(`    Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`    Health:      http://localhost:${PORT}/health\n`);
+
+    // Register background jobs after server is fully up
+    require('./src/jobs/scoring.job');
   });
 
   // ── Graceful shutdown ───────────────────────────────────────────────────────

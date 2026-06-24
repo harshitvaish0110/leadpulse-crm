@@ -7,7 +7,10 @@
 
 'use strict';
 
+const axios    = require('axios');
 const { prisma } = require('../lib/prisma');
+
+const ML_URL = process.env.ML_SERVICE_URL || 'http://localhost:5001';
 
 /**
  * GET /api/analytics/revenue
@@ -42,7 +45,20 @@ async function revenue(req, res, next) {
     const totalRevenue = historical.reduce((s, m) => s + m.y, 0);
     const avgMonthly   = historical.length ? Math.round(totalRevenue / historical.length) : 0;
 
-    res.json({ success: true, historical, totalRevenue, avgMonthly });
+    // Call ML service for 90-day Prophet forecast
+    let forecast = [];
+    try {
+      const mlRes = await axios.post(
+        `${ML_URL}/forecast/revenue`,
+        { historical },
+        { timeout: 30_000 }
+      );
+      forecast = mlRes.data.forecast || [];
+    } catch (mlErr) {
+      console.warn('Forecast service unavailable:', mlErr.message);
+    }
+
+    res.json({ success: true, historical, forecast, totalRevenue, avgMonthly });
   } catch (err) {
     next(err);
   }

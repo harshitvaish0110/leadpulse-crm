@@ -8,6 +8,8 @@
 'use strict';
 
 const axios      = require('axios');
+const fs         = require('fs');
+const FormData   = require('form-data');
 const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 
@@ -184,4 +186,71 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, create, getOne, remove };
+/**
+ * POST /api/activities/upload-audio
+ * Forwards audio file to ML service for Whisper transcription + Claude extraction.
+ * Creates a TRANSCRIPT activity in the database.
+ */
+async function uploadAudio(req, res, next) {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
+
+    const { contactId, dealId } = req.body;
+    if (!contactId) return res.status(400).json({ error: 'contactId required' });
+
+    // Forward file to Python ML service
+    const form = new FormData();
+    form.append('audio', fs.createReadStream(req.file.path), {
+      filename:    req.file.originalname || 'recording.mp3',
+      contentType: req.file.mimetype,
+    });
+
+    let extraction;
+    try {
+      const mlRes = await axios.post(`${ML_URL}/transcribe/`, form, {
+        headers: form.getHeaders(),
+        timeout: 120_000, // 2 min for long recordings
+      });
+      extraction = mlRes.data;
+    } catch (mlErr) {
+      extraction = {
+        transcript:      'Transcription service unavailable',
+        summary:         'ML service not running. Start with: python app.py in ml-service/',
+        sentiment:       'NEUTRAL',
+        actionItems:     [],
+        objections:      [],
+        pricingMentions: [],
+        nextSteps:       '',
+        keyTopics:       [],
+      };
+    } finally {
+      // Always clean up uploaded file
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    }
+
+    // Create TRANSCRIPT activity in DB
+    const activity = await prisma.activity.create({
+      data: {
+        type:      'TRANSCRIPT',
+        subject:   'Call Recording',
+        notes:     extraction.summary,
+        sentiment: extraction.sentiment || 'NEUTRAL',
+        metadata:  JSON.stringify(extraction),
+        contactId,
+        dealId:    dealId || null,
+        userId:    req.user.id,
+        occurredAt: new Date(),
+      },
+      include: ACTIVITY_INCLUDE,
+    });
+
+    emit(req, 'activity:created', { activityId: activity.id, contactId });
+    res.json({ success: true, activity, extraction });
+  } catch (err) {
+    // Clean up file on unexpected errors
+    if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    next(err);
+  }
+}
+
+module.exports = { list, create, getOne, remove, uploadAudio };

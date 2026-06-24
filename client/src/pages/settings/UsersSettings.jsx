@@ -70,7 +70,7 @@ export default function UsersSettings() {
   });
 
   const toggleActiveMutation = useMutation({
-    mutationFn: ({ id, active }) => api.patch(`/api/users/${id}`, { active }),
+    mutationFn: ({ id, isActive }) => api.patch(`/api/users/${id}`, { isActive }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
     onError: () => toast.error('Failed to update user'),
   });

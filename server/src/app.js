@@ -19,6 +19,7 @@ const activityRoutes   = require('./routes/activities.routes');
 const taskRoutes       = require('./routes/tasks.routes');
 const analyticsRoutes  = require('./routes/analytics.routes');
 const aiRoutes         = require('./routes/ai.routes');
+const usersRoutes      = require('./routes/users.routes');
 
 const { errorHandler, notFoundHandler } = require('./middleware/error.middleware');
 
@@ -32,12 +33,20 @@ function createApp() {
 
   app.use(cors({
     origin: (origin, callback) => {
-      const allowed = [
-        process.env.CLIENT_URL || 'http://localhost:5173',
+      // Build allowed list: base + any extra production origins from env
+      const base = [
         'http://localhost:5173',
         'http://localhost:3000',
-      ];
-      if (!origin || allowed.includes(origin)) return callback(null, true);
+        process.env.CLIENT_URL,
+        process.env.EXTRA_ORIGINS,
+      ].filter(Boolean);
+
+      // Allow any *.vercel.app subdomain (preview deployments)
+      const isVercel = origin && /^https:\/\/[\w-]+\.vercel\.app$/.test(origin);
+
+      if (!origin || base.includes(origin) || isVercel) {
+        return callback(null, true);
+      }
       return callback(new Error(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,
@@ -63,6 +72,8 @@ function createApp() {
   app.use('/api/tasks',      taskRoutes);
   app.use('/api/analytics',  analyticsRoutes);
   app.use('/api/ai',         aiRoutes);
+  app.use('/api/users',      usersRoutes);
+  app.use('/api/settings',   usersRoutes); // integrations endpoint
 
   app.use(notFoundHandler);
   app.use(errorHandler);

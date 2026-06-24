@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Mail, Phone, Building2, Calendar, TrendingUp,
-  Edit2, Trash2, Plus, PhoneCall, MessageSquare, FileText
+  Edit2, Trash2, Plus, PhoneCall, MessageSquare, FileText, Wand2
 } from 'lucide-react';
 import { getContact, updateContact, deleteContact } from '../../api/contacts';
 import { getActivities, createActivity } from '../../api/activities';
@@ -14,6 +14,8 @@ import Avatar from '../../components/ui/Avatar';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import Skeleton from '../../components/ui/Skeleton';
+import NextActionCard from '../../components/ai/NextActionCard';
+import EmailComposer from '../../components/ai/EmailComposer';
 import toast from 'react-hot-toast';
 
 const LEAD_SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue', NEW: 'gray' };
@@ -74,6 +76,7 @@ export default function ContactDetail() {
   const [showActivity, setShowActivity] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
+  const [activeTab, setActiveTab] = useState('timeline'); // 'timeline' | 'ai'
 
   const { data: contactData, isLoading } = useQuery({
     queryKey: ['contact', id],
@@ -168,6 +171,15 @@ export default function ContactDetail() {
             )}
           </div>
 
+          {/* AI: Next Best Action */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3">AI Recommendation</h2>
+            <NextActionCard
+              contactId={id}
+              onActionTaken={() => setShowActivity(true)}
+            />
+          </div>
+
           {/* Open Tasks */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
             <div className="flex items-center justify-between mb-3">
@@ -192,48 +204,79 @@ export default function ContactDetail() {
           </div>
         </div>
 
-        {/* Right: Activity Timeline */}
-        <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-gray-700">Activity Timeline</h2>
-            <Button size="sm" onClick={() => setShowActivity(true)}>
-              <Plus size={14} className="mr-1.5" /> Log Activity
-            </Button>
+        {/* Right: Activity Timeline + AI Composer */}
+        <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm">
+          {/* Tab bar */}
+          <div className="flex border-b border-gray-100 px-6 pt-4">
+            {[['timeline', 'Timeline'], ['ai', 'AI Tools']].map(([key, label]) => (
+              <button key={key} onClick={() => setActiveTab(key)}
+                className={`pb-3 mr-6 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === key ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}>
+                {label}
+              </button>
+            ))}
           </div>
-          {(activitiesData?.activities || []).length === 0 ? (
-            <p className="text-sm text-gray-400 py-8 text-center">No activities yet — log a call, email, or meeting</p>
-          ) : (
-            <div className="relative space-y-0">
-              <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100" />
-              {(activitiesData?.activities || []).map(a => {
-                const Icon = ACTIVITY_ICONS[a.type] || PhoneCall;
-                const sentiment = a.sentiment;
-                const sentimentColor = sentiment === 'POSITIVE' ? 'text-green-600' : sentiment === 'NEGATIVE' ? 'text-red-500' : 'text-gray-400';
-                return (
-                  <div key={a.id} className="flex gap-4 pb-6 relative">
-                    <div className="w-8 h-8 bg-white border-2 border-gray-100 rounded-full flex items-center justify-center flex-shrink-0 z-10">
-                      <Icon size={14} className="text-indigo-500" />
-                    </div>
-                    <div className="flex-1 pt-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-medium text-gray-800">{a.subject || a.type}</span>
-                        {a.sentiment && (
-                          <span className={`text-xs ${sentimentColor}`}>{a.sentiment.toLowerCase()}</span>
-                        )}
-                        <span className="text-xs text-gray-400 ml-auto">
-                          {new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </span>
-                      </div>
-                      {a.notes && <p className="text-sm text-gray-500">{a.notes}</p>}
-                      {a.durationMinutes && (
-                        <p className="text-xs text-gray-400 mt-0.5">{a.durationMinutes} min</p>
-                      )}
-                    </div>
+
+          <div className="p-6">
+            {/* Timeline Tab */}
+            {activeTab === 'timeline' && (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-semibold text-gray-700">Activity Timeline</h2>
+                  <Button size="sm" onClick={() => setShowActivity(true)}>
+                    <Plus size={14} className="mr-1.5" /> Log Activity
+                  </Button>
+                </div>
+                {(activitiesData?.activities || []).length === 0 ? (
+                  <p className="text-sm text-gray-400 py-8 text-center">No activities yet — log a call, email, or meeting</p>
+                ) : (
+                  <div className="relative space-y-0">
+                    <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100" />
+                    {(activitiesData?.activities || []).map(a => {
+                      const Icon = ACTIVITY_ICONS[a.type] || PhoneCall;
+                      const sentimentColor = a.sentiment === 'POSITIVE' ? 'text-green-600' : a.sentiment === 'NEGATIVE' ? 'text-red-500' : 'text-gray-400';
+                      return (
+                        <div key={a.id} className="flex gap-4 pb-6 relative">
+                          <div className="w-8 h-8 bg-white border-2 border-gray-100 rounded-full flex items-center justify-center flex-shrink-0 z-10">
+                            <Icon size={14} className="text-indigo-500" />
+                          </div>
+                          <div className="flex-1 pt-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-medium text-gray-800">{a.subject || a.type}</span>
+                              {a.sentiment && (
+                                <span className={`text-xs ${sentimentColor}`}>{a.sentiment.toLowerCase()}</span>
+                              )}
+                              <span className="text-xs text-gray-400 ml-auto">
+                                {new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                              </span>
+                            </div>
+                            {a.notes && <p className="text-sm text-gray-500">{a.notes}</p>}
+                            {a.durationMinutes && (
+                              <p className="text-xs text-gray-400 mt-0.5">{a.durationMinutes} min</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
+              </>
+            )}
+
+            {/* AI Tools Tab */}
+            {activeTab === 'ai' && (
+              <div className="space-y-6">
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Wand2 size={15} className="text-indigo-500" />
+                    <h2 className="text-sm font-semibold text-gray-700">AI Email Composer</h2>
+                  </div>
+                  <EmailComposer contactId={id} />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

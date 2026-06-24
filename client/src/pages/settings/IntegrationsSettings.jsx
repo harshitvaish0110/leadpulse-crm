@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Eye, EyeOff, CheckCircle2, XCircle, Loader2, Zap } from 'lucide-react';
 import Button from '../../components/ui/Button';
+import api from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 const INTEGRATIONS = [
@@ -61,7 +63,7 @@ function ApiKeyInput({ value, onChange, placeholder, show, onToggle }) {
   );
 }
 
-function IntegrationCard({ integration }) {
+function IntegrationCard({ integration, serverConnected }) {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -110,6 +112,16 @@ function IntegrationCard({ integration }) {
         </div>
         {/* Status badge */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {serverConnected === true && (
+            <span className="flex items-center gap-1 text-xs text-green-600 font-medium bg-green-50 border border-green-100 px-2 py-0.5 rounded-full">
+              <CheckCircle2 size={12} /> Configured
+            </span>
+          )}
+          {serverConnected === false && (
+            <span className="flex items-center gap-1 text-xs text-amber-600 font-medium bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full">
+              <XCircle size={12} /> Not configured
+            </span>
+          )}
           {testResult === 'ok' && (
             <span className="flex items-center gap-1 text-xs text-green-600 font-medium">
               <CheckCircle2 size={13} /> Connected
@@ -119,9 +131,6 @@ function IntegrationCard({ integration }) {
             <span className="flex items-center gap-1 text-xs text-red-500 font-medium">
               <XCircle size={13} /> Failed
             </span>
-          )}
-          {testResult === null && (
-            <span className="text-xs text-gray-400">Not configured</span>
           )}
         </div>
       </div>
@@ -201,6 +210,12 @@ function IntegrationCard({ integration }) {
 }
 
 export default function IntegrationsSettings() {
+  const { data: statusData } = useQuery({
+    queryKey: ['integration-status'],
+    queryFn:  () => api.get('/api/settings/integrations').then(r => r.data.integrations),
+    staleTime: 30_000,
+  });
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -210,7 +225,11 @@ export default function IntegrationsSettings() {
 
       <div className="space-y-4">
         {INTEGRATIONS.map(integration => (
-          <IntegrationCard key={integration.key} integration={integration} />
+          <IntegrationCard
+            key={integration.key}
+            integration={integration}
+            serverConnected={statusData ? statusData[integration.key] : undefined}
+          />
         ))}
       </div>
     </div>
