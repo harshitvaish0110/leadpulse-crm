@@ -1,23 +1,28 @@
 /**
  * LeadPulse — AI Service (Google Gemini via @google/genai)
  *
- * Uses the NEW official google-genai SDK (not the deprecated @google/generative-ai).
- * Model: gemini-2.0-flash — FREE tier: 15 req/min, 1M tokens/day.
- * Get key FREE at: https://aistudio.google.com/apikey
+ * Key design decisions:
+ *  - Tries a list of fallback models in order if one is busy/unavailable.
+ *  - Retries up to 3 times with 2-second delay between attempts.
+ *  - getJSON returns parsed object; streamResponse writes SSE to res.
+ *  - getText returns plain string.
  *
- * Same export surface as before:
- *   streamResponse(prompt, systemPrompt, res)
- *   getJSON(prompt, systemPrompt)
- *   getText(prompt, systemPrompt, maxTokens)
- *   logAICall(...)
+ * Free key: https://aistudio.google.com/apikey
  */
 
 'use strict';
 
 const { GoogleGenAI } = require('@google/genai');
 
-const MODEL       = 'models/gemini-2.5-flash';   // free quota available on this key
-const MINI_MODEL  = 'models/gemini-2.0-flash-lite'; // faster for short responses
+// Ordered list — first available/non-busy model wins
+// Confirmed working on this API key (AQ. prefix = GCP project key)
+const MODELS = [
+  'models/gemini-2.5-flash',      // primary — best quality
+  'models/gemini-2.5-flash-lite', // fallback — lighter, still works
+];
+
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 2000; // ms
 
 let _ai = null;
 
@@ -26,19 +31,51 @@ function getAI() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'your-gemini-api-key-here') {
     throw new Error(
-      'GEMINI_API_KEY not set. Get a FREE key at https://aistudio.google.com/apikey and add it to your .env file'
+      'GEMINI_API_KEY not set. Get a FREE key at https://aistudio.google.com/apikey'
     );
   }
   _ai = new GoogleGenAI({ apiKey });
   return _ai;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Try a Gemini call across multiple models with retries.
+ * @param {Function} fn - async fn(ai, model) => result
+ */
+async function withFallback(fn) {
+  const ai = getAI();
+  let lastErr;
+
+  for (const model of MODELS) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await fn(ai, model);
+      } catch (err) {
+        const status = err.status || err.code || 0;
+        const isRetryable = status === 503 || status === 429 || status === 500;
+        lastErr = err;
+
+        if (!isRetryable) break; // wrong model / auth — skip to next model
+        if (attempt < MAX_RETRIES) {
+          console.warn(`[Gemini] ${model} attempt ${attempt} failed (${status}), retrying in ${RETRY_DELAY}ms...`);
+          await sleep(RETRY_DELAY);
+        }
+      }
+    }
+    console.warn(`[Gemini] Skipping ${model}, trying next fallback...`);
+  }
+
+  throw lastErr;
+}
+
 /**
  * Stream a Gemini response as SSE to the HTTP response object.
  */
 async function streamResponse(prompt, systemPrompt = '', res) {
-  const ai = getAI();
-
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -46,25 +83,26 @@ async function streamResponse(prompt, systemPrompt = '', res) {
   res.flushHeaders?.();
 
   try {
-    const response = await ai.models.generateContentStream({
-      model:  MODEL,
-      config: {
-        systemInstruction: systemPrompt || 'You are a helpful CRM assistant.',
-        maxOutputTokens:   1200,
-        temperature:       0.7,
-      },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    });
+    await withFallback(async (ai, model) => {
+      const response = await ai.models.generateContentStream({
+        model,
+        config: {
+          systemInstruction: systemPrompt || 'You are a helpful CRM assistant.',
+          maxOutputTokens: 1200,
+          temperature: 0.7,
+        },
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      });
 
-    for await (const chunk of response) {
-      const text = chunk.text;
-      if (text) {
-        res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      for await (const chunk of response) {
+        if (chunk.text) {
+          res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+        }
       }
-    }
+    });
   } catch (err) {
-    console.error('[Gemini stream error]', err.message);
-    res.write(`data: ${JSON.stringify({ text: '\n[AI service error — check GEMINI_API_KEY]' })}\n\n`);
+    console.error('[Gemini streamResponse error]', err.message);
+    res.write(`data: ${JSON.stringify({ text: '\n[AI temporarily unavailable — please try again in a moment]' })}\n\n`);
   }
 
   res.write('data: [DONE]\n\n');
@@ -75,44 +113,44 @@ async function streamResponse(prompt, systemPrompt = '', res) {
  * Get a structured JSON response from Gemini.
  */
 async function getJSON(prompt, systemPrompt = '') {
-  const ai = getAI();
+  return withFallback(async (ai, model) => {
+    const response = await ai.models.generateContent({
+      model,
+      config: {
+        systemInstruction:
+          (systemPrompt || 'You are a helpful assistant.') +
+          ' IMPORTANT: Reply with valid JSON only. No markdown fences, no explanation.',
+        maxOutputTokens: 800,
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+      },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
 
-  const response = await ai.models.generateContent({
-    model:  MODEL,
-    config: {
-      systemInstruction: (systemPrompt || 'You are a helpful assistant.') +
-        ' IMPORTANT: Reply with valid JSON only. No markdown fences, no explanation.',
-      maxOutputTokens:    800,
-      temperature:        0.2,
-      responseMimeType:   'application/json',
-    },
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    let text = response.text.trim();
+    if (text.startsWith('```')) {
+      text = text.replace(/```(?:json)?/g, '').trim();
+    }
+    return JSON.parse(text);
   });
-
-  let text = response.text.trim();
-  if (text.startsWith('```')) {
-    text = text.replace(/```(?:json)?/g, '').trim();
-  }
-  return JSON.parse(text);
 }
 
 /**
  * Get a plain-text (non-streaming) response from Gemini.
  */
 async function getText(prompt, systemPrompt = '', maxTokens = 400) {
-  const ai = getAI();
-
-  const response = await ai.models.generateContent({
-    model:  MINI_MODEL,
-    config: {
-      systemInstruction: systemPrompt || 'You are a helpful CRM assistant.',
-      maxOutputTokens:   maxTokens,
-      temperature:       0.5,
-    },
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+  return withFallback(async (ai, model) => {
+    const response = await ai.models.generateContent({
+      model,
+      config: {
+        systemInstruction: systemPrompt || 'You are a helpful CRM assistant.',
+        maxOutputTokens: maxTokens,
+        temperature: 0.5,
+      },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
+    return response.text;
   });
-
-  return response.text;
 }
 
 /**
@@ -125,11 +163,11 @@ async function logAICall(feature, userId, input, output, tokensUsed = 0, contact
       data: {
         feature,
         userId,
-        input:      JSON.stringify(input),
-        output:     output ? JSON.stringify(output) : null,
+        input: JSON.stringify(input),
+        output: output ? JSON.stringify(output) : null,
         tokensUsed: tokensUsed || 0,
-        contactId:  contactId || null,
-        dealId:     dealId    || null,
+        contactId: contactId || null,
+        dealId: dealId || null,
       },
     });
   } catch (e) {
