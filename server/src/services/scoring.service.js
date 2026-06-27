@@ -28,7 +28,7 @@ function _ruleExplanation(score, label, daysSince, recentCount, openDeal, sentim
 /** Call Gemini ONLY when explicitly requested (single contact, user-triggered). */
 async function _aiExplanation(score, label, daysSince, recentCount, openDeal, sentimentScore) {
   try {
-    const { getText } = require('./claude.service');
+    const { getText } = require('./ai.service');
     const prompt = `Lead score: ${score}/120. Label: ${label}. Days since last contact: ${daysSince}. Recent activities (30d): ${recentCount}. Open deal stage: ${openDeal?.stage || 'none'}. Sentiment: ${Math.round(sentimentScore * 100)}%.
 Write exactly ONE sentence explaining this lead score. Start with "${label} lead —"`;
     return await getText(prompt, 'You are a CRM analyst. Write a single concise sentence explaining a lead score.');

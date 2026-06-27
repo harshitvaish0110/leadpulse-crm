@@ -1,13 +1,13 @@
 'use strict';
 
 /**
- * LeadPulse CRM — AI Controller (Google Gemini)
- * All AI features use gemini-2.5-flash via the shared claude.service.js.
+ * LeadPulse CRM — AI Controller
+ * All AI features route through ai.service.js which tries Gemini → Groq → OpenRouter.
  */
 
 const axios      = require('axios');
 const { prisma } = require('../lib/prisma');
-const ai         = require('../services/claude.service');
+const ai         = require('../services/ai.service');
 
 const ML_URL = process.env.ML_SERVICE_URL || 'http://localhost:5001';
 
