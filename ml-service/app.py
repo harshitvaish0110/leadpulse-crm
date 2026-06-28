@@ -47,6 +47,8 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    port = int(os.getenv("FLASK_PORT", 5001))
+    port  = int(os.getenv("FLASK_PORT", 5001))
     debug = os.getenv("FLASK_ENV", "development") == "development"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    # use_reloader=False prevents the watchdog from restarting the server
+    # every time it detects changes in the large transformers package tree.
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)

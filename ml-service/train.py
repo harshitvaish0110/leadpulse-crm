@@ -51,23 +51,23 @@ def train_churn_model(conn):
         SELECT
             c.id,
             c.status,
-            COALESCE(c.sentiment_score, 0.5)                              AS sentiment_score,
-            COALESCE(c.lead_score, 0)                                     AS lead_score,
-            COALESCE(EXTRACT(DAY FROM NOW() - MAX(a.occurred_at)), 999)   AS days_since_last_contact,
-            COUNT(CASE WHEN a.occurred_at > NOW() - INTERVAL '30 days' THEN 1 END) AS activity_last_30,
-            COUNT(CASE WHEN a.occurred_at > NOW() - INTERVAL '90 days' THEN 1 END) AS activity_last_90,
-            COUNT(DISTINCT d.id)                                           AS deal_count,
-            COALESCE(SUM(CAST(d.value AS FLOAT)), 0)                      AS total_deal_value,
+            COALESCE(c."sentimentScore", 0.5)                               AS sentiment_score,
+            COALESCE(c."leadScore", 0)                                      AS lead_score,
+            COALESCE(EXTRACT(DAY FROM NOW() - MAX(a."occurredAt")), 999)    AS days_since_last_contact,
+            COUNT(CASE WHEN a."occurredAt" > NOW() - INTERVAL '30 days' THEN 1 END) AS activity_last_30,
+            COUNT(CASE WHEN a."occurredAt" > NOW() - INTERVAL '90 days' THEN 1 END) AS activity_last_90,
+            COUNT(DISTINCT d.id)                                             AS deal_count,
+            COALESCE(SUM(CAST(d.value AS FLOAT)), 0)                        AS total_deal_value,
             CASE WHEN EXISTS (
                 SELECT 1 FROM deals d2
-                WHERE d2.contact_id = c.id
+                WHERE d2."contactId" = c.id
                   AND d2.stage NOT IN ('CLOSED_WON', 'CLOSED_LOST')
-            ) THEN 1 ELSE 0 END                                            AS has_open_deal
+            ) THEN 1 ELSE 0 END                                              AS has_open_deal
         FROM contacts c
-        LEFT JOIN activities a ON a.contact_id = c.id
-        LEFT JOIN deals d ON d.contact_id = c.id
+        LEFT JOIN activities a ON a."contactId" = c.id
+        LEFT JOIN deals d ON d."contactId" = c.id
         WHERE c.status IN ('ACTIVE', 'CHURNED', 'INACTIVE')
-        GROUP BY c.id, c.status, c.sentiment_score, c.lead_score
+        GROUP BY c.id, c.status, c."sentimentScore", c."leadScore"
     """, conn)
 
     print(f"  Rows fetched: {len(df)}")
@@ -135,17 +135,17 @@ def train_win_model(conn):
         SELECT
             d.id,
             d.stage,
-            CAST(d.value AS FLOAT)                                         AS value,
-            COALESCE(EXTRACT(DAY FROM NOW() - d.updated_at), 0)            AS days_in_stage,
-            COUNT(a.id)                                                     AS total_activities,
-            COUNT(CASE WHEN a.occurred_at > NOW() - INTERVAL '7 days' THEN 1 END) AS activity_last_7,
-            COALESCE(co.size, 50)                                           AS company_size
+            CAST(d.value AS FLOAT)                                          AS value,
+            COALESCE(EXTRACT(DAY FROM NOW() - d."updatedAt"), 0)            AS days_in_stage,
+            COUNT(a.id)                                                      AS total_activities,
+            COUNT(CASE WHEN a."occurredAt" > NOW() - INTERVAL '7 days' THEN 1 END) AS activity_last_7,
+            COALESCE(co.size, 50)                                            AS company_size
         FROM deals d
-        LEFT JOIN activities a  ON a.deal_id = d.id
-        LEFT JOIN contacts c    ON c.id = d.contact_id
-        LEFT JOIN companies co  ON co.id = c.company_id
+        LEFT JOIN activities a  ON a."dealId" = d.id
+        LEFT JOIN contacts c    ON c.id = d."contactId"
+        LEFT JOIN companies co  ON co.id = c."companyId"
         WHERE d.stage IN ('CLOSED_WON', 'CLOSED_LOST')
-        GROUP BY d.id, d.stage, d.value, d.updated_at, co.size
+        GROUP BY d.id, d.stage, d.value, d."updatedAt", co.size
     """, conn)
 
     print(f"  Closed deals fetched: {len(df)}")

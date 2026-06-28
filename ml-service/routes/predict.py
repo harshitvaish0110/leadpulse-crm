@@ -31,18 +31,18 @@ def _load_models():
         if os.path.exists(churn_path) and os.path.exists(scaler_path):
             _churn_model  = joblib.load(churn_path)
             _churn_scaler = joblib.load(scaler_path)
-            print("✓ Churn model loaded")
+            print("[OK] Churn model loaded")
         else:
-            print("⚠ Churn model not found — run python train.py first. Using heuristic fallback.")
+            print("[WARN] Churn model not found — run python train.py first. Using heuristic fallback.")
 
         if os.path.exists(win_path):
             _win_model = joblib.load(win_path)
-            print("✓ Win probability model loaded")
+            print("[OK] Win probability model loaded")
         else:
-            print("⚠ Win probability model not found — using heuristic fallback.")
+            print("[WARN] Win probability model not found — using heuristic fallback.")
 
     except ImportError:
-        print("⚠ joblib/sklearn not available. Using heuristic fallback.")
+        print("[WARN] joblib/sklearn not available. Using heuristic fallback.")
     finally:
         _models_loaded = True
 

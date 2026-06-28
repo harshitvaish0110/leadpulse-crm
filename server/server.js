@@ -20,7 +20,7 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 async function bootstrap() {
   // ── Verify DB connectivity before accepting traffic ─────────────────────────
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    await prisma.$queryRawUnsafe('SELECT 1');
     console.log('✓  Database connected');
   } catch (err) {
     console.error('✗  Database connection failed:', err.message);

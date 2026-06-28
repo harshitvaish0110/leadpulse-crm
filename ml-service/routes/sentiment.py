@@ -25,9 +25,9 @@ def get_classifier():
                 truncation=True,
                 max_length=512,
             )
-            print("✓ Sentiment model loaded")
+            print("[OK] Sentiment model loaded")
         except Exception as e:
-            print(f"⚠ Could not load transformer model: {e}. Using fallback keyword heuristic.")
+            print(f"[WARN] Could not load transformer model: {e}. Using fallback keyword heuristic.")
             _classifier = "fallback"
     return _classifier
 
