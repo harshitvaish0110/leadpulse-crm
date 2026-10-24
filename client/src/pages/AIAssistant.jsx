@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Send, Sparkles, PlusCircle, Bot, User, Loader2, ExternalLink } from 'lucide-react';
-import { useAuthStore } from '../store/authStore';
+
+const NO_MESSAGES = [];
 
 const SUGGESTIONS = [
   'Which deals are at risk this week?',
@@ -56,7 +57,6 @@ function Message({ msg }) {
 }
 
 export default function AIAssistant() {
-  const { token } = useAuthStore();
   const [conversations, setConversations] = useState([
     { id: 'default', label: 'New Chat', messages: [] },
   ]);
@@ -68,7 +68,7 @@ export default function AIAssistant() {
   const sourceRef = useRef(null);
 
   const activeConv = conversations.find(c => c.id === activeConvId);
-  const messages = activeConv?.messages || [];
+  const messages = activeConv?.messages ?? NO_MESSAGES;
 
   const setMessages = (updater) => {
     setConversations(prev => prev.map(c =>
@@ -123,7 +123,7 @@ export default function AIAssistant() {
           if (msgs.length > 0) msgs[msgs.length - 1].content += (data.text || '');
           return msgs;
         });
-      } catch {}
+      } catch { /* ignore malformed SSE payload */ }
     };
 
     es.onerror = () => {

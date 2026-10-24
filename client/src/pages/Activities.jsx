@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { PhoneCall, Mail, Calendar, FileText, MessageSquare, Plus, Trash2, Filter } from 'lucide-react';
+import { PhoneCall, Mail, Calendar, FileText, MessageSquare, Plus, Trash2 } from 'lucide-react';
 import { getActivities, createActivity, deleteActivity } from '../api/activities';
 import { getContacts } from '../api/contacts';
 import Button from '../components/ui/Button';
@@ -119,7 +119,7 @@ export default function Activities() {
             ${!typeFilter ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
           All
         </button>
-        {Object.entries(ACTIVITY_CONFIG).map(([type, { icon: Icon, badge }]) => (
+        {Object.entries(ACTIVITY_CONFIG).map(([type, { icon: Icon }]) => (
           <button key={type} onClick={() => { setTypeFilter(type); setPage(1); }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all
               ${typeFilter === type ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>

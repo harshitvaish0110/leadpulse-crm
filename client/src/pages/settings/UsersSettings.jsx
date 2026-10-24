@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { UserPlus, Shield, Mail, Check, X } from 'lucide-react';
+import { UserPlus, Shield, Mail } from 'lucide-react';
 import api from '../../api/axiosInstance';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';

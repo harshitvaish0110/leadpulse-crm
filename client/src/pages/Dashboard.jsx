@@ -240,7 +240,7 @@ export default function Dashboard() {
             <Skeleton lines={8} />
           ) : (
             <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
-              {(activitiesData?.activities || []).map((a, idx) => {
+              {(activitiesData?.activities || []).map((a) => {
                 const Icon = ACTIVITY_ICONS[a.type] || Activity;
                 const timeAgo = new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                 return (

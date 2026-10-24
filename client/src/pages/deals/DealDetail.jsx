@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, DollarSign, User, Calendar, TrendingUp,
-  PhoneCall, Mail, FileText, MessageSquare, Plus, Trash2
+  ArrowLeft, User, Calendar,
+  PhoneCall, Mail, FileText, MessageSquare, Plus
 } from 'lucide-react';
 import {
   RadialBarChart, RadialBar, ResponsiveContainer
@@ -11,7 +11,6 @@ import {
 import { getDeal, updateDeal, updateDealStage } from '../../api/deals';
 import { getActivities, createActivity } from '../../api/activities';
 import Button from '../../components/ui/Button';
-import Badge from '../../components/ui/Badge';
 import Avatar from '../../components/ui/Avatar';
 import Skeleton from '../../components/ui/Skeleton';
 import Modal from '../../components/ui/Modal';
@@ -21,11 +20,6 @@ import DealSummaryPanel from '../../components/ai/DealSummaryPanel';
 import toast from 'react-hot-toast';
 
 const STAGES = ['LEAD','CONTACTED','DEMO','PROPOSAL','NEGOTIATION','CLOSED_WON','CLOSED_LOST'];
-const STAGE_VARIANT = {
-  LEAD: 'gray', CONTACTED: 'indigo', DEMO: 'purple',
-  PROPOSAL: 'amber', NEGOTIATION: 'amber',
-  CLOSED_WON: 'green', CLOSED_LOST: 'red',
-};
 const ACTIVITY_ICONS = {
   CALL: PhoneCall, EMAIL: Mail,
   MEETING: Calendar, NOTE: FileText, TRANSCRIPT: MessageSquare,
@@ -101,7 +95,6 @@ export default function DealDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [showActivity, setShowActivity] = useState(false);
-  const [stageChanging, setStageChanging] = useState(false);
   const [notes, setNotes] = useState('');
   const [notesTimer, setNotesTimer] = useState(null);
 

@@ -57,7 +57,7 @@ export default function SmartReplyBar({ emailThread, contactId, onUseReply }) {
 
       {/* Tone buttons */}
       <div className="grid grid-cols-3 gap-2">
-        {TONES.map(({ key, label, Icon, desc }) => (
+        {TONES.map(({ key, label, Icon }) => (
           <button
             key={key}
             onClick={() => generate(key)}

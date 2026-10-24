@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, TrendingUp, DollarSign, GripVertical
+  Plus, GripVertical
 } from 'lucide-react';
 import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -9,8 +9,6 @@ import { CSS } from '@dnd-kit/utilities';
 import { getDeals, createDeal, updateDealStage } from '../../api/deals';
 import { getContacts } from '../../api/contacts';
 import Button from '../../components/ui/Button';
-import Badge from '../../components/ui/Badge';
-import Modal from '../../components/ui/Modal';
 import SlideOver from '../../components/ui/SlideOver';
 import Input from '../../components/ui/Input';
 import Skeleton from '../../components/ui/Skeleton';

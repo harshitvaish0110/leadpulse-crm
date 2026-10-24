@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { Wand2, Copy, RefreshCw, CheckCircle2 } from 'lucide-react';
 import Button from '../ui/Button';
 import { useAuthStore } from '../../store/authStore';
@@ -70,7 +70,7 @@ export default function EmailComposer({ contactId, dealId, onEmailReady }) {
             } else {
               setBody(fullText);
             }
-          } catch {}
+          } catch { /* ignore partial or non-JSON SSE line */ }
         }
       }
     } catch (err) {

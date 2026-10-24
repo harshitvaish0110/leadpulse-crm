@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { getContact, updateContact, deleteContact } from '../../api/contacts';
 import { getActivities, createActivity } from '../../api/activities';
-import { getTasks, createTask } from '../../api/tasks';
+import { getTasks } from '../../api/tasks';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import Avatar from '../../components/ui/Avatar';

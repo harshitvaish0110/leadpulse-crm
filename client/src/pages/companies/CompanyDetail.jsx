@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, Globe, Building2, Users, TrendingUp,
+  ArrowLeft, Globe, Users, TrendingUp,
   Edit2, Trash2, ExternalLink, Activity
 } from 'lucide-react';
 import { getCompany, updateCompany, deleteCompany } from '../../api/companies';
@@ -155,6 +155,7 @@ export default function CompanyDetail() {
             { label: 'Activities', value: company._count?.activities ?? 0, icon: Activity },
           ].map(({ label, value, icon: Icon }) => (
             <div key={label} className="text-center">
+              <Icon size={16} className="mx-auto mb-1 text-gray-400" />
               <p className="text-2xl font-bold text-gray-900">{value}</p>
               <p className="text-xs text-gray-400 mt-0.5">{label}</p>
             </div>

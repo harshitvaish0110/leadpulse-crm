@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie, Legend } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie } from 'recharts';
 import { TrendingUp, DollarSign, Target, Award } from 'lucide-react';
 import { getRevenue, getPipeline, getWinLoss, getRepPerformance, getSentimentTrends } from '../api/analytics';
 import Skeleton from '../components/ui/Skeleton';

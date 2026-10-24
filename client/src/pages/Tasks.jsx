@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckSquare, Plus, Calendar, Trash2, Check, Clock, AlertCircle } from 'lucide-react';
+import { CheckSquare, Plus, Calendar, Trash2, Check } from 'lucide-react';
 import { getTasks, createTask, completeTask, deleteTask } from '../api/tasks';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,7 +11,6 @@ import Skeleton from '../components/ui/Skeleton';
 import toast from 'react-hot-toast';
 
 const PRIORITY_VARIANT = { HIGH: 'red', MEDIUM: 'amber', LOW: 'gray' };
-const PRIORITY_ICON = { HIGH: AlertCircle, MEDIUM: Clock, LOW: CheckSquare };
 
 function AddTaskForm({ onClose }) {
   const qc = useQueryClient();
@@ -125,7 +124,6 @@ export default function Tasks() {
           <EmptyState icon={CheckSquare} title="No tasks found" description="Create a task to stay on top of your work"
             actionLabel="New Task" onAction={() => setShowForm(true)} />
         ) : tasks.map(task => {
-          const Icon = PRIORITY_ICON[task.priority] || CheckSquare;
           const overdue = isOverdue(task);
           return (
             <div key={task.id} className={`bg-white rounded-xl border shadow-sm p-4 flex items-start gap-4 group transition-all
