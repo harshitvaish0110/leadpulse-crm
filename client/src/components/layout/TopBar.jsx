@@ -2,11 +2,12 @@ import { Bell, Menu, ChevronDown, LogOut } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
+import { logout } from '../../api/axiosInstance';
 import { useUIStore } from '../../store/uiStore';
 import Avatar from '../ui/Avatar';
 
 export default function TopBar({ title }) {
-  const { user, logout } = useAuthStore();
+  const user = useAuthStore((s) => s.user);
   const { notifications, markAllRead, toggleSidebar } = useUIStore();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -14,9 +15,9 @@ export default function TopBar({ title }) {
 
   const unread = notifications.filter(n => !n.read).length;
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
   };
 
   return (

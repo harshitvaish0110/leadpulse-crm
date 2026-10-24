@@ -1,35 +1,32 @@
 /**
  * useSocket — Socket.IO connection hook.
- * Initializes one persistent connection per session, joins the user's
- * private room, and wires real-time events to React Query invalidations
- * and UIStore notifications.
+ * One connection per signed-in user. The server authenticates the handshake
+ * and assigns rooms; events are wired to React Query invalidations and
+ * UIStore notifications.
  */
 
 import { useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { useAuthStore } from '../store/authStore';
+import { useAuthStore, getAccessToken } from '../store/authStore';
 import { useUIStore } from '../store/uiStore';
+import { refreshSession } from '../api/axiosInstance';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ||
-                   import.meta.env.VITE_API_URL    ||
-                   'http://localhost:3001';
+// Empty = same origin (the Vite dev proxy forwards /socket.io).
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || undefined;
 
 export function useSocket() {
-  const { user, token }       = useAuthStore();
+  const userId                = useAuthStore((s) => s.user?.id);
   const { addNotification }   = useUIStore();
   const queryClient           = useQueryClient();
   const socketRef             = useRef(null);
 
   useEffect(() => {
-    if (!user?.id || !token) return;
-
-    // Prevent duplicate connections (React StrictMode double-mount)
-    if (socketRef.current?.connected) return;
+    if (!userId) return;
 
     const socket = io(SOCKET_URL, {
-      query: { userId: user.id },
-      auth:  { token },
+      // Called on every (re)connect, so a refreshed token is picked up without reconnecting.
+      auth: (cb) => cb({ token: getAccessToken() }),
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 2000,
@@ -37,14 +34,10 @@ export function useSocket() {
 
     socketRef.current = socket;
 
-    // ── Join private user room ──────────────────────────────────────────────
-    socket.on('connect', () => {
-      socket.emit('join', user.id);
-      console.log('[Socket] connected →', socket.id);
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('[Socket] disconnected →', reason);
+    // The server rejects expired tokens at the handshake; refresh once and retry.
+    socket.on('connect_error', (err) => {
+      if (err.data?.code !== 'TOKEN_EXPIRED') return;
+      refreshSession().then(() => socket.connect()).catch(() => {});
     });
 
     // ── Deal events ─────────────────────────────────────────────────────────
@@ -54,7 +47,7 @@ export function useSocket() {
       addNotification({
         type:    'deal',
         title:   'Deal Stage Updated',
-        message: `"${data.title}" moved to ${data.newStage.replace(/_/g, ' ')}`,
+        message: `"${data.title}" moved to ${data.toStage.replace(/_/g, ' ')}`,
         dealId:  data.dealId,
       });
     });
@@ -99,5 +92,5 @@ export function useSocket() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [user?.id, token]); // eslint-disable-line react-hooks/exhaustive-deps -- store actions and queryClient are stable; reconnect only on identity change (reworked in M2)
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps -- store actions and queryClient are stable; reconnect only when the signed-in user changes
 }

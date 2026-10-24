@@ -1,10 +1,8 @@
 import { useState } from 'react';
 import { Brain, RefreshCw, AlertCircle } from 'lucide-react';
 import Button from '../ui/Button';
-import { useAuthStore } from '../../store/authStore';
+import { authFetch } from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 /** Minimal markdown renderer — converts ## headings + **bold** to HTML */
 function renderMarkdown(md) {
@@ -19,7 +17,6 @@ function renderMarkdown(md) {
 }
 
 export default function DealSummaryPanel({ dealId }) {
-  const { token }         = useAuthStore();
   const [summary, setSummary]   = useState('');
   const [loading, setLoading]   = useState(false);
   const [generated, setGenerated] = useState(false);
@@ -32,11 +29,10 @@ export default function DealSummaryPanel({ dealId }) {
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE}/api/ai/deal-summary/${dealId}`, {
+      const response = await authFetch(`/api/ai/deal-summary/${dealId}`, {
         method:  'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization:  `Bearer ${token}`,
         },
         body: JSON.stringify({ dealId }),
       });

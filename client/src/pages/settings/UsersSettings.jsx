@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { UserPlus, Shield, Mail } from 'lucide-react';
+import { UserPlus, Shield, Mail, Copy, X } from 'lucide-react';
 import api from '../../api/axiosInstance';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
@@ -13,23 +13,54 @@ import toast from 'react-hot-toast';
 const ROLE_VARIANT = { ADMIN: 'indigo', MANAGER: 'purple', SALES_REP: 'gray' };
 
 function InviteModal({ onClose }) {
+  const qc = useQueryClient();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('SALES_REP');
   const [loading, setLoading] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await api.post('/api/users/invite', { email, role });
-      toast.success(`Invitation sent to ${email}`);
-      onClose();
+      const { data } = await api.post('/api/users/invite', { email, role });
+      setInviteUrl(data.inviteUrl);
+      qc.invalidateQueries({ queryKey: ['users'] });
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to send invitation');
+      const res = err.response?.data;
+      toast.error(res?.details?.[0]?.msg || res?.error || 'Failed to create invitation');
     } finally {
       setLoading(false);
     }
   };
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      toast.success('Invite link copied');
+    } catch {
+      toast.error('Copy failed — select the link and copy it manually');
+    }
+  };
+
+  // Invites are not emailed yet, so the admin shares the link.
+  if (inviteUrl) {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Share this single-use link with <strong>{email}</strong>. It expires in 72 hours.
+        </p>
+        <div className="flex gap-2">
+          <input readOnly value={inviteUrl} onFocus={e => e.target.select()} aria-label="Invite link"
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-700 bg-gray-50" />
+          <Button type="button" variant="secondary" onClick={copyLink}>
+            <Copy size={14} className="mr-1.5" /> Copy
+          </Button>
+        </div>
+        <Button type="button" onClick={onClose} className="w-full">Done</Button>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -47,7 +78,7 @@ function InviteModal({ onClose }) {
       <div className="flex gap-3">
         <Button type="button" variant="secondary" onClick={onClose} className="flex-1">Cancel</Button>
         <Button type="submit" loading={loading} className="flex-1">
-          <Mail size={14} className="mr-1.5" /> Send Invitation
+          <Mail size={14} className="mr-1.5" /> Create Invite Link
         </Button>
       </div>
     </form>
@@ -66,16 +97,23 @@ export default function UsersSettings() {
   const updateRoleMutation = useMutation({
     mutationFn: ({ id, role }) => api.patch(`/api/users/${id}`, { role }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast.success('Role updated'); },
-    onError: () => toast.error('Failed to update role'),
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to update role'),
   });
 
   const toggleActiveMutation = useMutation({
     mutationFn: ({ id, isActive }) => api.patch(`/api/users/${id}`, { isActive }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
-    onError: () => toast.error('Failed to update user'),
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to update user'),
+  });
+
+  const revokeInviteMutation = useMutation({
+    mutationFn: (id) => api.delete(`/api/users/invitations/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast.success('Invitation revoked'); },
+    onError: () => toast.error('Failed to revoke invitation'),
   });
 
   const users = data?.users || [];
+  const invitations = data?.invitations || [];
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -135,11 +173,14 @@ export default function UsersSettings() {
                   </td>
                   <td className="px-5 py-4">
                     <button
-                      onClick={() => toggleActiveMutation.mutate({ id: u.id, active: !u.active })}
+                      role="switch"
+                      aria-checked={u.isActive}
+                      aria-label={`${u.isActive ? 'Deactivate' : 'Activate'} ${u.firstName} ${u.lastName}`}
+                      onClick={() => toggleActiveMutation.mutate({ id: u.id, isActive: !u.isActive })}
                       className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0
-                        ${u.active !== false ? 'bg-indigo-600' : 'bg-gray-200'}`}>
+                        ${u.isActive ? 'bg-indigo-600' : 'bg-gray-200'}`}>
                       <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-                        ${u.active !== false ? 'left-[22px]' : 'left-0.5'}`} />
+                        ${u.isActive ? 'left-[22px]' : 'left-0.5'}`} />
                     </button>
                   </td>
                   <td className="px-5 py-4">
@@ -155,6 +196,32 @@ export default function UsersSettings() {
           </table>
         )}
       </div>
+
+      {invitations.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <h3 className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-100">
+            Pending invitations
+          </h3>
+          <ul className="divide-y divide-gray-50">
+            {invitations.map(inv => (
+              <li key={inv.id} className="px-5 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-900">{inv.email}</p>
+                  <p className="text-xs text-gray-400">
+                    {inv.role.replace('_', ' ')} · expires {new Date(inv.expiresAt).toLocaleString()}
+                  </p>
+                </div>
+                <button
+                  onClick={() => revokeInviteMutation.mutate(inv.id)}
+                  aria-label={`Revoke invitation for ${inv.email}`}
+                  className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors">
+                  <X size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <Modal isOpen={showInvite} onClose={() => setShowInvite(false)} title="Invite Team Member">
         <InviteModal onClose={() => setShowInvite(false)} />

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
@@ -7,6 +8,9 @@ import AppShell from './components/layout/AppShell';
 // Auth pages
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
+import AcceptInvite from './pages/auth/AcceptInvite';
+import { refreshSession } from './api/axiosInstance';
+import { useAuthStore } from './store/authStore';
 
 // App pages (import all 15)
 import Dashboard from './pages/Dashboard';
@@ -30,13 +34,25 @@ const queryClient = new QueryClient({
   },
 });
 
+/** Restores the session from the refresh cookie once per page load. */
+function useAuthBootstrap() {
+  useEffect(() => {
+    refreshSession().catch(() => {
+      // A login that finished first must not be undone by the failed restore.
+      if (useAuthStore.getState().status === 'bootstrapping') useAuthStore.getState().clear();
+    });
+  }, []);
+}
+
 export default function App() {
+  useAuthBootstrap();
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
           <Route path="/login"    element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/accept-invite" element={<AcceptInvite />} />
 
           <Route element={<PrivateRoute />}>
             <Route element={<AppShell />}>

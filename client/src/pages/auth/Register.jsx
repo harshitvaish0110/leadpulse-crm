@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
-import api from '../../api/axiosInstance';
+import { authApi } from '../../api/axiosInstance';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import toast from 'react-hot-toast';
@@ -10,7 +10,7 @@ import toast from 'react-hot-toast';
 export default function Register() {
   const [form, setForm] = useState({ firstName: '', lastName: '', email: '', password: '', confirmPassword: '' });
   const [loading, setLoading] = useState(false);
-  const { login } = useAuthStore();
+  const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -21,12 +21,14 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      const { data } = await api.post('/api/auth/register', form);
-      login(data.token, data.user);
+      const { firstName, lastName, email, password } = form;
+      const { data } = await authApi.post('/api/auth/register', { firstName, lastName, email, password });
+      setSession(data.accessToken, data.user);
       toast.success(`Welcome to Leadpulse, ${data.user.firstName}!`);
-      navigate('/dashboard');
+      navigate('/dashboard', { replace: true });
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Registration failed');
+      const res = err.response?.data;
+      toast.error(res?.details?.[0]?.msg || res?.error || 'Registration failed');
     } finally {
       setLoading(false);
     }
