@@ -1,0 +1,67 @@
+# LeadPulse CI — lint, test and build all three services.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - name: Migration guard (no drops of hand-managed DB objects)
+        run: |
+          if grep -RInE 'DROP INDEX[^;]*(embeddings_vector_hnsw|embeddings_tsv_gin|contacts_tags_gin)|DROP (TRIGGER|VIEW)[^;]*(audit_logs_append_only|ml_contact_features|ml_deal_features)' prisma/migrations; then
+            echo "::error::A migration drops a hand-managed index/trigger/view; remove the DROP from the migration"
+            exit 1
+          fi
+      - run: DATABASE_URL="postgresql://ci:ci@localhost:5432/ci" npx prisma generate
+      - run: npm test
+
+  ml:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ml-service/requirements*.txt
+      # CPU-only torch wheel (avoids the multi-GB CUDA build)
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+
+  client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test -- --run
+      - run: npm run build
