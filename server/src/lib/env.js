@@ -23,6 +23,11 @@ function validateEnv(env = process.env) {
     errors.push('JWT_SECRET must be set and at least 32 characters long');
   }
 
+  if (env.NODE_ENV === 'production') {
+    if (!env.ML_SERVICE_TOKEN) errors.push('ML_SERVICE_TOKEN is required in production');
+    if (!env.CORS_ORIGINS && !env.CLIENT_URL) errors.push('CORS_ORIGINS is required in production');
+  }
+
   if (!AI_PROVIDER_KEYS.some((k) => env[k]) && env.AI_MOCK !== 'true') {
     warnings.push(`No AI provider key set (${AI_PROVIDER_KEYS.join(', ')}) — AI features will be unavailable`);
   }
@@ -30,4 +35,11 @@ function validateEnv(env = process.env) {
   return { errors, warnings };
 }
 
-module.exports = { validateEnv };
+/** Exact CORS allow-list: CORS_ORIGINS (comma-separated), else CLIENT_URL, else the Vite dev server. */
+function allowedOrigins(env = process.env) {
+  const list = (env.CORS_ORIGINS || env.CLIENT_URL || 'http://localhost:5173')
+    .split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean);
+  return [...new Set(list)];
+}
+
+module.exports = { validateEnv, allowedOrigins };

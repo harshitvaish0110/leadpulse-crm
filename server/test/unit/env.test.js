@@ -26,3 +26,16 @@ test('no AI key is a warning, suppressed in mock mode', () => {
   assert.equal(validateEnv(noKeys).warnings.length, 1);
   assert.equal(validateEnv({ ...noKeys, AI_MOCK: 'true' }).warnings.length, 0);
 });
+
+test('production requires ML_SERVICE_TOKEN and an origin allow-list', () => {
+  const { errors } = validateEnv({ ...VALID, NODE_ENV: 'production' });
+  assert.equal(errors.length, 2);
+  assert.deepEqual(validateEnv({ ...VALID, NODE_ENV: 'production', ML_SERVICE_TOKEN: 't', CORS_ORIGINS: 'https://a.app' }).errors, []);
+});
+
+test('allowedOrigins parses CORS_ORIGINS and falls back to CLIENT_URL', () => {
+  const { allowedOrigins } = require('../../src/lib/env');
+  assert.deepEqual(allowedOrigins({ CORS_ORIGINS: 'https://a.app/, https://b.app,https://a.app' }), ['https://a.app', 'https://b.app']);
+  assert.deepEqual(allowedOrigins({ CLIENT_URL: 'http://localhost:5173' }), ['http://localhost:5173']);
+  assert.deepEqual(allowedOrigins({}), ['http://localhost:5173']);
+});
