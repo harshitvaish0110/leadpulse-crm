@@ -12,6 +12,5 @@ router.post('/smart-reply',      ctrl.smartReply);
 router.post('/next-action',      ctrl.nextAction);
 router.post('/enrich-contact',   ctrl.enrichContact);
 router.get('/chat',              ctrl.chat);
-router.post('/transcribe',       ctrl.transcribe);
 
 module.exports = router;

@@ -8,15 +8,18 @@
 
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
+const { scoped, scopeFor, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
+const { emitScoped } = require('../lib/realtime');
 
 const DEAL_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
 
 const DEAL_LIST_INCLUDE = {
-  contact: { select: { id: true, firstName: true, lastName: true, email: true } },
+  contact: { select: { id: true, firstName: true, lastName: true, email: true, ownerId: true } },
   owner:   { select: { id: true, firstName: true, lastName: true } },
 };
 
-const DEAL_DETAIL_INCLUDE = {
+/** Detail include; activity and task sub-lists follow the caller's own scopes. */
+const dealDetailInclude = (user) => ({
   contact: {
     include: {
       company: { select: { id: true, name: true } },
@@ -24,21 +27,20 @@ const DEAL_DETAIL_INCLUDE = {
   },
   owner:      { select: { id: true, firstName: true, lastName: true, email: true } },
   activities: {
+    where:   scopeFor(user, 'activity'),
     orderBy: { occurredAt: 'desc' },
     take:    20,
     include: { user: { select: { id: true, firstName: true, lastName: true } } },
   },
   tasks: {
-    where:   { completed: false },
+    where:   { completed: false, ...scopeFor(user, 'task') },
     orderBy: { dueDate: 'asc' },
     include: { assignedTo: { select: { id: true, firstName: true, lastName: true } } },
   },
-};
+});
 
-function emit(req, event, payload) {
-  const io = req.app.get('io');
-  if (io) io.emit(event, payload);
-}
+/** Deal events go to the deal owner, the contact owner and managers. */
+const emitDeal = (deal, event, payload) => emitScoped([deal.ownerId, deal.contact?.ownerId], event, payload);
 
 function buildWhere({ search, ownerId, contactId, stage }) {
   return {
@@ -58,7 +60,7 @@ function buildWhere({ search, ownerId, contactId, stage }) {
 async function list(req, res, next) {
   try {
     const { view = 'kanban', search = '', ownerId, contactId, stage, page = 1, limit = 50 } = req.query;
-    const where = buildWhere({ search, ownerId, contactId, stage });
+    const where = scoped(req.user, 'deal', buildWhere({ search, ownerId, contactId, stage }));
 
     if (view === 'kanban') {
       // Parallel fetch all stages — much faster than sequential
@@ -115,11 +117,8 @@ async function create(req, res, next) {
       throw ApiError.badRequest(`stage must be one of: ${DEAL_STAGES.join(', ')}`);
     }
 
-    // Verify contact exists
-    const contact = await prisma.contact.findUnique({
-      where: { id: contactId }, select: { id: true },
-    });
-    if (!contact) throw ApiError.notFound('Contact not found');
+    await assertContactInScope(req.user, contactId);
+    const ownerId = (await resolveOwnerId(req.user, req.body.ownerId)) ?? req.user.id;
 
     const deal = await prisma.deal.create({
       data: {
@@ -130,12 +129,12 @@ async function create(req, res, next) {
         notes:            notes            || null,
         lostReason:       lostReason       || null,
         contactId,
-        ownerId:          req.user.id,
+        ownerId,
       },
       include: DEAL_LIST_INCLUDE,
     });
 
-    emit(req, 'deal:created', { dealId: deal.id, stage: deal.stage, ownerId: req.user.id });
+    emitDeal(deal, 'deal:created', { dealId: deal.id, stage: deal.stage });
     res.status(201).json({ success: true, deal });
   } catch (err) {
     next(err);
@@ -147,9 +146,9 @@ async function create(req, res, next) {
  */
 async function getOne(req, res, next) {
   try {
-    const deal = await prisma.deal.findUnique({
-      where:   { id: req.params.id },
-      include: DEAL_DETAIL_INCLUDE,
+    const deal = await prisma.deal.findFirst({
+      where:   { id: req.params.id, ...scopeFor(req.user, 'deal') },
+      include: dealDetailInclude(req.user),
     });
 
     if (!deal) throw ApiError.notFound('Deal not found');
@@ -178,14 +177,15 @@ async function update(req, res, next) {
     if (data.stage && !DEAL_STAGES.includes(data.stage)) {
       throw ApiError.badRequest(`Invalid stage: ${data.stage}`);
     }
+    if ('ownerId' in data) data.ownerId = await resolveOwnerId(req.user, data.ownerId);
 
     const deal = await prisma.deal.update({
-      where:   { id: req.params.id },
+      where:   { id: req.params.id, ...scopeFor(req.user, 'deal') },
       data,
       include: DEAL_LIST_INCLUDE,
     });
 
-    emit(req, 'deal:updated', { dealId: deal.id });
+    emitDeal(deal, 'deal:updated', { dealId: deal.id });
     res.json({ success: true, deal });
   } catch (err) {
     next(err);
@@ -203,8 +203,12 @@ async function updateStage(req, res, next) {
       throw ApiError.badRequest(`stage must be one of: ${DEAL_STAGES.join(', ')}`);
     }
 
+    const where = { id: req.params.id, ...scopeFor(req.user, 'deal') };
+    const before = await prisma.deal.findFirst({ where, select: { stage: true } });
+    if (!before) throw ApiError.notFound('Deal not found');
+
     const deal = await prisma.deal.update({
-      where: { id: req.params.id },
+      where,
       data:  {
         stage,
         // Auto-set win probability when moving to terminal stages
@@ -214,16 +218,13 @@ async function updateStage(req, res, next) {
       include: DEAL_LIST_INCLUDE,
     });
 
-    // Targeted push to the deal owner's socket room
-    const io = req.app.get('io');
-    if (io && deal.ownerId) {
-      io.to(`user:${deal.ownerId}`).emit('deal:stage_changed', {
-        dealId:   deal.id,
-        title:    deal.title,
-        newStage: deal.stage,
-        value:    Number(deal.value),
-      });
-    }
+    emitDeal(deal, 'deal:stage_changed', {
+      dealId:    deal.id,
+      title:     deal.title,
+      fromStage: before.stage,
+      toStage:   deal.stage,
+      value:     Number(deal.value),
+    });
 
     res.json({ success: true, deal });
   } catch (err) {
@@ -236,8 +237,11 @@ async function updateStage(req, res, next) {
  */
 async function remove(req, res, next) {
   try {
-    await prisma.deal.delete({ where: { id: req.params.id } });
-    emit(req, 'deal:deleted', { dealId: req.params.id });
+    const deal = await prisma.deal.delete({
+      where:  { id: req.params.id, ...scopeFor(req.user, 'deal') },
+      select: { id: true, ownerId: true, contact: { select: { ownerId: true } } },
+    });
+    emitDeal(deal, 'deal:deleted', { dealId: deal.id });
     res.json({ success: true, message: 'Deal deleted' });
   } catch (err) {
     next(err);

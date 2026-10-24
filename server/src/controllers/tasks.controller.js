@@ -6,6 +6,8 @@
 
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
+const { scoped, scopeFor, assertInScope, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
+const { emitToUsers } = require('../lib/realtime');
 
 const TASK_INCLUDE = {
   contact:    { select: { id: true, firstName: true, lastName: true } },
@@ -13,6 +15,13 @@ const TASK_INCLUDE = {
   assignedTo: { select: { id: true, firstName: true, lastName: true } },
   createdBy:  { select: { id: true, firstName: true, lastName: true } },
 };
+
+/** Linked contact/deal must be in the caller's scope; assignee follows the owner rule. */
+async function checkRefs(user, { contactId, dealId, assignedToId }) {
+  if (contactId) await assertContactInScope(user, contactId);
+  if (dealId) await assertInScope(user, 'deal', dealId);
+  return resolveOwnerId(user, assignedToId);
+}
 
 /**
  * GET /api/tasks
@@ -31,7 +40,7 @@ async function list(req, res, next) {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
     const skip     = (pageNum - 1) * limitNum;
 
-    const where = {
+    const where = scoped(req.user, 'task', {
       AND: [
         assignedToId ? { assignedToId } : {},
         contactId    ? { contactId }    : {},
@@ -45,7 +54,7 @@ async function list(req, res, next) {
           },
         } : {},
       ],
-    };
+    });
 
     const ALLOWED_SORTS = ['dueDate', 'createdAt', 'priority'];
     const orderField = ALLOWED_SORTS.includes(sortBy) ? sortBy : 'dueDate';
@@ -79,6 +88,7 @@ async function create(req, res, next) {
     const { title, description, dueDate, priority, contactId, dealId, assignedToId } = req.body;
 
     if (!title) throw ApiError.badRequest('title is required');
+    const assignee = (await checkRefs(req.user, { contactId, dealId, assignedToId })) ?? req.user.id;
 
     const task = await prisma.task.create({
       data: {
@@ -88,18 +98,14 @@ async function create(req, res, next) {
         priority:    priority    || 'MEDIUM',
         contactId:   contactId   || null,
         dealId:      dealId      || null,
-        assignedToId: assignedToId || req.user.id,
+        assignedToId: assignee,
         createdById:  req.user.id,
       },
       include: TASK_INCLUDE,
     });
 
-    // Push notification to assigned user
-    const io = req.app.get('io');
-    if (io && task.assignedToId !== req.user.id) {
-      io.to(`user:${task.assignedToId}`).emit('task:assigned', {
-        taskId: task.id, title: task.title, dueDate: task.dueDate,
-      });
+    if (task.assignedToId !== req.user.id) {
+      emitToUsers([task.assignedToId], 'task:assigned', { taskId: task.id, title: task.title, dueDate: task.dueDate });
     }
 
     res.status(201).json({ success: true, task });
@@ -119,9 +125,11 @@ async function update(req, res, next) {
       if (req.body[f] !== undefined) data[f] = req.body[f];
     }
     if (data.dueDate) data.dueDate = new Date(data.dueDate);
+    const assignee = await checkRefs(req.user, data);
+    if ('assignedToId' in data) data.assignedToId = assignee;
 
     const task = await prisma.task.update({
-      where:   { id: req.params.id },
+      where:   { id: req.params.id, ...scopeFor(req.user, 'task') },
       data,
       include: TASK_INCLUDE,
     });
@@ -142,7 +150,7 @@ async function complete(req, res, next) {
     const isComplete = Boolean(completed);
 
     const task = await prisma.task.update({
-      where: { id: req.params.id },
+      where: { id: req.params.id, ...scopeFor(req.user, 'task') },
       data:  {
         completed:   isComplete,
         completedAt: isComplete ? new Date() : null,
@@ -161,7 +169,7 @@ async function complete(req, res, next) {
  */
 async function remove(req, res, next) {
   try {
-    await prisma.task.delete({ where: { id: req.params.id } });
+    await prisma.task.delete({ where: { id: req.params.id, ...scopeFor(req.user, 'task') } });
     res.json({ success: true, message: 'Task deleted' });
   } catch (err) {
     next(err);

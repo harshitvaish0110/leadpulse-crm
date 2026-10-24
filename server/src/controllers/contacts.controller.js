@@ -11,6 +11,8 @@ const { Parser }   = require('json2csv');
 const papa         = require('papaparse');
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
+const { scoped, scopeFor, isPrivileged, resolveOwnerId } = require('../middleware/auth.middleware');
+const { emitScoped } = require('../lib/realtime');
 
 // ── Shared include shape for list queries (lightweight) ───────────────────────
 const CONTACT_LIST_INCLUDE = {
@@ -42,16 +44,11 @@ const CONTACT_DETAIL_INCLUDE = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Emits a socket event if io is registered on the app. */
-function emit(req, event, payload) {
-  const io = req.app.get('io');
-  if (io) io.emit(event, payload);
-}
-
-/** Builds the Prisma where clause from query params. */
-function buildWhere({ search, status, ownerId, tags, companyId }) {
-  return {
+/** Builds the Prisma where clause from query params, limited to the caller's scope. */
+function buildWhere(user, { search, status, ownerId, tags, companyId, ids }) {
+  return scoped(user, 'contact', {
     AND: [
+      ids ? { id: { in: String(ids).split(',').map(id => id.trim()).filter(Boolean) } } : {},
       search ? {
         OR: [
           { firstName: { contains: search, mode: 'insensitive' } },
@@ -65,7 +62,7 @@ function buildWhere({ search, status, ownerId, tags, companyId }) {
       companyId ? { companyId } : {},
       tags      ? { tags: { hasSome: tags.split(',').map(t => t.trim()) } } : {},
     ],
-  };
+  });
 }
 
 // ── Controllers ───────────────────────────────────────────────────────────────
@@ -90,7 +87,7 @@ async function list(req, res, next) {
     const orderField = ALLOWED_SORTS.includes(sortBy) ? sortBy : 'createdAt';
     const orderDir   = sortDir === 'asc' ? 'asc' : 'desc';
 
-    const where = buildWhere({ search, status, ownerId, tags, companyId });
+    const where = buildWhere(req.user, { search, status, ownerId, tags, companyId });
 
     const [contacts, total] = await Promise.all([
       prisma.contact.findMany({
@@ -131,6 +128,7 @@ async function create(req, res, next) {
     if (!firstName || !lastName || !email) {
       throw ApiError.badRequest('firstName, lastName, and email are required');
     }
+    const ownerId = (await resolveOwnerId(req.user, req.body.ownerId)) ?? req.user.id;
 
     const contact = await prisma.contact.create({
       data: {
@@ -141,7 +139,7 @@ async function create(req, res, next) {
         title:       title   || null,
         linkedinUrl: linkedinUrl || null,
         companyId:   companyId  || null,
-        ownerId:     req.user.id,
+        ownerId,
         tags:        Array.isArray(tags) ? tags : [],
         status:      status || 'LEAD',
         customFields: customFields || null,
@@ -149,7 +147,7 @@ async function create(req, res, next) {
       include: CONTACT_LIST_INCLUDE,
     });
 
-    emit(req, 'contact:created', { contactId: contact.id, ownerId: req.user.id });
+    emitScoped([contact.ownerId], 'contact:created', { contactId: contact.id });
     res.status(201).json({ success: true, contact });
   } catch (err) {
     next(err);
@@ -161,8 +159,8 @@ async function create(req, res, next) {
  */
 async function getOne(req, res, next) {
   try {
-    const contact = await prisma.contact.findUnique({
-      where:   { id: req.params.id },
+    const contact = await prisma.contact.findFirst({
+      where:   { id: req.params.id, ...scopeFor(req.user, 'contact') },
       include: CONTACT_DETAIL_INCLUDE,
     });
 
@@ -178,11 +176,10 @@ async function getOne(req, res, next) {
  */
 async function update(req, res, next) {
   try {
+    // Score, churn, sentiment and next-best-action fields are system-computed and never client-writable.
     const ALLOWED = [
       'firstName', 'lastName', 'email', 'phone', 'title', 'linkedinUrl',
       'status', 'companyId', 'ownerId', 'tags', 'customFields',
-      'leadScore', 'leadScoreLabel', 'leadScoreExplanation',
-      'churnRisk', 'sentimentScore', 'nextBestAction',
     ];
 
     const data = {};
@@ -193,14 +190,16 @@ async function update(req, res, next) {
     }
 
     if (data.email) data.email = data.email.toLowerCase().trim();
+    if ('ownerId' in data) data.ownerId = await resolveOwnerId(req.user, data.ownerId);
 
-    const contact = await prisma.contact.update({
-      where:   { id: req.params.id },
-      data,
-      include: CONTACT_LIST_INCLUDE,
-    });
+    const where = { id: req.params.id, ...scopeFor(req.user, 'contact') };
+    const before = await prisma.contact.findFirst({ where, select: { ownerId: true } });
+    if (!before) throw ApiError.notFound('Contact not found');
 
-    emit(req, 'contact:updated', { contactId: contact.id });
+    const contact = await prisma.contact.update({ where, data, include: CONTACT_LIST_INCLUDE });
+
+    // A reassigned contact also disappears from the previous owner's views.
+    emitScoped([contact.ownerId, before.ownerId], 'contact:updated', { contactId: contact.id });
     res.json({ success: true, contact });
   } catch (err) {
     next(err);
@@ -212,8 +211,11 @@ async function update(req, res, next) {
  */
 async function remove(req, res, next) {
   try {
-    await prisma.contact.delete({ where: { id: req.params.id } });
-    emit(req, 'contact:deleted', { contactId: req.params.id });
+    const contact = await prisma.contact.delete({
+      where:  { id: req.params.id, ...scopeFor(req.user, 'contact') },
+      select: { id: true, ownerId: true },
+    });
+    emitScoped([contact.ownerId], 'contact:deleted', { contactId: contact.id });
     res.json({ success: true, message: 'Contact deleted' });
   } catch (err) {
     next(err);
@@ -222,11 +224,13 @@ async function remove(req, res, next) {
 
 /**
  * GET /api/contacts/export
- * Downloads all contacts as a CSV file.
+ * Downloads the caller's contacts as CSV; accepts the list filters or `ids=a,b,c`.
  */
 async function exportCSV(req, res, next) {
   try {
+    const { search, status, ownerId, tags, companyId, ids } = req.query;
     const contacts = await prisma.contact.findMany({
+      where:   buildWhere(req.user, { search, status, ownerId, tags, companyId, ids }),
       include: { company: { select: { name: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -247,7 +251,8 @@ async function exportCSV(req, res, next) {
       createdAt:   c.createdAt.toISOString().split('T')[0],
     }));
 
-    const fields = Object.keys(rows[0] ?? {});
+    const fields = ['firstName', 'lastName', 'email', 'phone', 'title', 'company', 'status',
+      'leadScore', 'leadScoreLabel', 'churnRisk', 'sentimentScore', 'tags', 'createdAt'];
     const csv    = new Parser({ fields }).parse(rows);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -277,7 +282,7 @@ async function importCSV(req, res, next) {
       throw ApiError.badRequest('CSV parse error', errors.slice(0, 5));
     }
 
-    const results = { created: 0, skipped: 0, failed: [] };
+    const results = { created: 0, updated: 0, skipped: 0, failed: [] };
 
     // Process in batches of 50 to avoid overwhelming the DB
     const BATCH = 50;
@@ -291,9 +296,28 @@ async function importCSV(req, res, next) {
             return;
           }
           try {
-            await prisma.contact.upsert({
-              where: { email },
-              create: {
+            const existing = await prisma.contact.findUnique({
+              where:  { email },
+              select: { id: true, ownerId: true, phone: true, title: true },
+            });
+            if (existing) {
+              if (!isPrivileged(req.user) && existing.ownerId !== req.user.id) {
+                results.failed.push({ row, reason: 'A contact with this email belongs to another user' });
+                return;
+              }
+              // Only fill empty fields so an import never overwrites CRM data.
+              await prisma.contact.update({
+                where: { id: existing.id },
+                data: {
+                  phone: existing.phone ?? (row.phone || row.Phone || null),
+                  title: existing.title ?? (row.title || row.Title || null),
+                },
+              });
+              results.updated++;
+              return;
+            }
+            await prisma.contact.create({
+              data: {
                 firstName:   (row.firstName || row.first_name || row['First Name'] || 'Unknown').trim(),
                 lastName:    (row.lastName  || row.last_name  || row['Last Name']  || 'Unknown').trim(),
                 email,
@@ -301,11 +325,6 @@ async function importCSV(req, res, next) {
                 title:       row.title || row.Title || null,
                 ownerId:     req.user.id,
                 tags:        [],
-              },
-              update: {
-                // Only update empty fields on import to avoid overwriting CRM data
-                phone: { set: row.phone || row.Phone || undefined },
-                title: { set: row.title || row.Title || undefined },
               },
             });
             results.created++;
@@ -316,7 +335,7 @@ async function importCSV(req, res, next) {
       );
     }
 
-    results.skipped = data.length - results.created - results.failed.length;
+    results.skipped = data.length - results.created - results.updated - results.failed.length;
     res.json({ success: true, ...results });
   } catch (err) {
     next(err);

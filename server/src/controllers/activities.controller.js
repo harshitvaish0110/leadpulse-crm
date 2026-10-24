@@ -7,13 +7,13 @@
 
 'use strict';
 
-const axios      = require('axios');
 const fs         = require('fs');
 const FormData   = require('form-data');
 const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
-
-const ML_URL = process.env.ML_SERVICE_URL || 'http://localhost:5001';
+const { scoped, scopeFor, assertInScope, assertContactInScope } = require('../middleware/auth.middleware');
+const { ml } = require('../lib/mlClient');
+const { emitScoped } = require('../lib/realtime');
 
 const ACTIVITY_INCLUDE = {
   contact: { select: { id: true, firstName: true, lastName: true } },
@@ -21,9 +21,14 @@ const ACTIVITY_INCLUDE = {
   user:    { select: { id: true, firstName: true, lastName: true } },
 };
 
-function emit(req, event, payload) {
-  const io = req.app.get('io');
-  if (io) io.emit(event, payload);
+/** Contact must be in scope; a deal, if given, must be in scope and belong to that contact. */
+async function assertParents(user, contactId, dealId) {
+  const contact = await assertContactInScope(user, contactId, { id: true, ownerId: true });
+  if (dealId) {
+    const deal = await assertInScope(user, 'deal', dealId, { contactId: true });
+    if (deal.contactId !== contactId) throw ApiError.badRequest('Deal does not belong to this contact', null, 'DEAL_CONTACT_MISMATCH');
+  }
+  return contact;
 }
 
 /**
@@ -42,7 +47,7 @@ async function list(req, res, next) {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
     const skip     = (pageNum - 1) * limitNum;
 
-    const where = {
+    const where = scoped(req.user, 'activity', {
       AND: [
         contactId ? { contactId } : {},
         dealId    ? { dealId }    : {},
@@ -55,7 +60,7 @@ async function list(req, res, next) {
           },
         } : {},
       ],
-    };
+    });
 
     const [activities, total] = await Promise.all([
       prisma.activity.findMany({
@@ -92,6 +97,7 @@ async function create(req, res, next) {
     if (!VALID_TYPES.includes(type)) {
       throw ApiError.badRequest(`type must be one of: ${VALID_TYPES.join(', ')}`);
     }
+    const contact = await assertParents(req.user, contactId, dealId);
 
     const activity = await prisma.activity.create({
       data: {
@@ -112,7 +118,7 @@ async function create(req, res, next) {
       setImmediate(() => runSentimentAnalysis(activity.id, contactId, notes));
     }
 
-    emit(req, 'activity:created', { activityId: activity.id, contactId });
+    emitScoped([req.user.id, contact.ownerId], 'activity:created', { activityId: activity.id, contactId, dealId: activity.dealId });
     res.status(201).json({ success: true, activity });
   } catch (err) {
     next(err);
@@ -125,11 +131,7 @@ async function create(req, res, next) {
  */
 async function runSentimentAnalysis(activityId, contactId, text) {
   try {
-    const { data } = await axios.post(
-      `${ML_URL}/sentiment/analyze`,
-      { text },
-      { timeout: 10_000 }
-    );
+    const { data } = await ml.post('/sentiment/analyze', { text });
 
     const { sentiment, score } = data;
 
@@ -162,8 +164,8 @@ async function runSentimentAnalysis(activityId, contactId, text) {
  */
 async function getOne(req, res, next) {
   try {
-    const activity = await prisma.activity.findUnique({
-      where:   { id: req.params.id },
+    const activity = await prisma.activity.findFirst({
+      where:   { id: req.params.id, ...scopeFor(req.user, 'activity') },
       include: ACTIVITY_INCLUDE,
     });
     if (!activity) throw ApiError.notFound('Activity not found');
@@ -178,8 +180,11 @@ async function getOne(req, res, next) {
  */
 async function remove(req, res, next) {
   try {
-    await prisma.activity.delete({ where: { id: req.params.id } });
-    emit(req, 'activity:deleted', { activityId: req.params.id });
+    const activity = await prisma.activity.delete({
+      where:  { id: req.params.id, ...scopeFor(req.user, 'activity') },
+      select: { id: true, userId: true, contactId: true, contact: { select: { ownerId: true } } },
+    });
+    emitScoped([activity.userId, activity.contact.ownerId], 'activity:deleted', { activityId: activity.id, contactId: activity.contactId });
     res.json({ success: true, message: 'Activity deleted' });
   } catch (err) {
     next(err);
@@ -193,10 +198,11 @@ async function remove(req, res, next) {
  */
 async function uploadAudio(req, res, next) {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
+    if (!req.file) throw ApiError.badRequest('No audio file uploaded');
 
     const { contactId, dealId } = req.body;
-    if (!contactId) return res.status(400).json({ error: 'contactId required' });
+    if (!contactId) throw ApiError.badRequest('contactId required');
+    const contact = await assertParents(req.user, contactId, dealId);
 
     // Forward file to Python ML service
     const form = new FormData();
@@ -207,7 +213,7 @@ async function uploadAudio(req, res, next) {
 
     let extraction;
     try {
-      const mlRes = await axios.post(`${ML_URL}/transcribe/`, form, {
+      const mlRes = await ml.post('/transcribe/', form, {
         headers: form.getHeaders(),
         timeout: 120_000, // 2 min for long recordings
       });
@@ -244,7 +250,7 @@ async function uploadAudio(req, res, next) {
       include: ACTIVITY_INCLUDE,
     });
 
-    emit(req, 'activity:created', { activityId: activity.id, contactId });
+    emitScoped([req.user.id, contact.ownerId], 'activity:created', { activityId: activity.id, contactId, dealId: activity.dealId });
     res.json({ success: true, activity, extraction });
   } catch (err) {
     // Clean up file on unexpected errors
