@@ -8,8 +8,16 @@
 const axios      = require('axios');
 const { prisma } = require('../lib/prisma');
 const ai         = require('../services/ai.service');
+const { ApiError } = require('../middleware/error.middleware');
+const { scopeFor } = require('../middleware/auth.middleware');
 
-const ML_URL = process.env.ML_SERVICE_URL || 'http://localhost:5001';
+/** Contact lookup limited to the caller's scope (404 otherwise). */
+async function findContact(user, contactId, args) {
+  if (!contactId) throw ApiError.badRequest('contactId required');
+  const contact = await prisma.contact.findFirst({ where: { id: contactId, ...scopeFor(user, 'contact') }, ...args });
+  if (!contact) throw ApiError.notFound('Contact not found');
+  return contact;
+}
 
 const SSE_HEADERS = {
   'Content-Type':  'text/event-stream',
@@ -27,10 +35,8 @@ function sseWrite(res, data, end = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function chat(req, res) {
   const question = (req.query.question || '').trim();
-  const history  = req.query.history  || '[]';
 
   Object.entries(SSE_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
-  res.setHeader('Access-Control-Allow-Origin', process.env.CLIENT_URL || '*');
   res.flushHeaders?.();
 
   if (!question) {
@@ -38,22 +44,10 @@ async function chat(req, res) {
     return;
   }
 
-  try {
-    const response = await axios({
-      method:       'get',
-      url:          `${ML_URL}/rag/query`,
-      params:       { question, history },
-      responseType: 'stream',
-      timeout:      60_000,
-    });
-    response.data.pipe(res);
-    response.data.on('end', () => res.end());
-  } catch (err) {
-    // ML service unavailable — fall back to Gemini directly with no context
-    const system = 'You are a helpful CRM assistant called LeadPulse. The user is asking about their CRM data.';
-    const prompt = question;
-    await ai.streamResponse(prompt, system, res);
-  }
+  // No record context for now: the old ML-side retrieval ignored ownership, so it
+  // stays disabled until retrieval is scoped to the caller.
+  const system = 'You are a helpful CRM assistant called LeadPulse. The user is asking about their CRM data.';
+  await ai.streamResponse(question, system, res);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,16 +56,12 @@ async function chat(req, res) {
 async function composeEmail(req, res, next) {
   try {
     const { contactId, context, tone = 'professional' } = req.body;
-    if (!contactId) return res.status(400).json({ error: 'contactId required' });
-
-    const contact = await prisma.contact.findUnique({
-      where:   { id: contactId },
+    const contact = await findContact(req.user, contactId, {
       include: {
         company:    { select: { name: true, industry: true } },
         activities: { take: 3, orderBy: { occurredAt: 'desc' }, select: { type: true, notes: true, occurredAt: true } },
       },
     });
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     const recentActivity = contact.activities.map(a =>
       `${a.type} on ${a.occurredAt.toISOString().slice(0, 10)}: ${a.notes || '(no notes)'}`
@@ -98,15 +88,15 @@ Return JSON only: { "subject": "...", "body": "..." }`;
 async function dealSummary(req, res, next) {
   try {
     const dealId = req.params.dealId || req.params.id || req.body.dealId;
-    const deal   = await prisma.deal.findUnique({
-      where:   { id: dealId },
+    const deal   = await prisma.deal.findFirst({
+      where:   { id: dealId, ...scopeFor(req.user, 'deal') },
       include: {
         contact:    { select: { firstName: true, lastName: true, company: { select: { name: true } } } },
         owner:      { select: { firstName: true, lastName: true } },
         activities: { take: 5, orderBy: { occurredAt: 'desc' }, select: { type: true, notes: true, sentiment: true, occurredAt: true } },
       },
     });
-    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+    if (!deal) throw ApiError.notFound('Deal not found');
 
     const actSummary = deal.activities.map(a =>
       `[${a.type}] ${a.occurredAt.toISOString().slice(0, 10)}: ${a.notes || '(no notes)'} (sentiment: ${a.sentiment || 'unknown'})`
@@ -148,17 +138,14 @@ Write:
 async function smartReply(req, res, next) {
   try {
     const { emailContent, contactId, tone = 'professional' } = req.body;
-    if (!emailContent) return res.status(400).json({ error: 'emailContent required' });
+    if (!emailContent) throw ApiError.badRequest('emailContent required');
 
     let contactContext = '';
     if (contactId) {
-      const contact = await prisma.contact.findUnique({
-        where:  { id: contactId },
+      const contact = await findContact(req.user, contactId, {
         select: { firstName: true, lastName: true, company: { select: { name: true } } },
       });
-      if (contact) {
-        contactContext = `Replying to: ${contact.firstName} ${contact.lastName} (${contact.company?.name || ''})`;
-      }
+      contactContext = `Replying to: ${contact.firstName} ${contact.lastName} (${contact.company?.name || ''})`;
     }
 
     const prompt = `Generate 3 smart reply options for this email.
@@ -183,12 +170,12 @@ async function nextAction(req, res, next) {
     const contactId = req.params.id || req.body.contactId;
     const dealId    = req.body.dealId;
 
-    if (!contactId && !dealId) return res.status(400).json({ error: 'contactId or dealId required' });
+    if (!contactId && !dealId) throw ApiError.badRequest('contactId or dealId required');
+    if (dealId) await prisma.deal.findFirstOrThrow({ where: { id: dealId, ...scopeFor(req.user, 'deal') }, select: { id: true } });
 
     let context = '';
     if (contactId) {
-      const contact = await prisma.contact.findUnique({
-        where:   { id: contactId },
+      const contact = await findContact(req.user, contactId, {
         include: {
           company:    { select: { name: true } },
           activities: { take: 5, orderBy: { occurredAt: 'desc' }, select: { type: true, notes: true, occurredAt: true, sentiment: true } },
@@ -219,20 +206,13 @@ Return JSON only: { "action": "specific action description", "reason": "why", "u
 // ─────────────────────────────────────────────────────────────────────────────
 async function enrichContact(req, res, next) {
   try {
-    const { contactId } = req.body;
-    if (!contactId) return res.status(400).json({ error: 'contactId required' });
-
-    const contact = await prisma.contact.findUnique({
-      where:   { id: contactId },
-      include: { company: true },
-    });
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    const contact = await findContact(req.user, req.body.contactId, { include: { company: true } });
 
     // Clearbit first if configured
     if (process.env.CLEARBIT_API_KEY && contact.email) {
       try {
         const r = await axios.get(
-          `https://person.clearbit.com/v2/combined/find?email=${contact.email}`,
+          `https://person.clearbit.com/v2/combined/find?email=${encodeURIComponent(contact.email)}`,
           { headers: { Authorization: `Bearer ${process.env.CLEARBIT_API_KEY}` }, timeout: 10_000 }
         );
         return res.json({ success: true, source: 'clearbit', enriched: {
@@ -258,17 +238,4 @@ Return JSON only: { "suggestedTitle": "...", "suggestedIndustry": "...", "sugges
   } catch (err) { next(err); }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/ai/transcribe  (audio → text stub)
-// ─────────────────────────────────────────────────────────────────────────────
-async function transcribe(req, res) {
-  // Proxy to ML service if available, else return stub
-  try {
-    const mlRes = await axios.post(`${ML_URL}/transcribe`, req.body, { timeout: 60_000 });
-    res.json(mlRes.data);
-  } catch {
-    res.json({ success: true, transcript: '[Transcription requires the ML service to be running]' });
-  }
-}
-
-module.exports = { chat, composeEmail, dealSummary, smartReply, nextAction, enrichContact, transcribe };
+module.exports = { chat, composeEmail, dealSummary, smartReply, nextAction, enrichContact };

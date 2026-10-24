@@ -7,10 +7,15 @@
 
 'use strict';
 
-const axios    = require('axios');
 const { prisma } = require('../lib/prisma');
+const { scoped, isPrivileged } = require('../middleware/auth.middleware');
+const { ml } = require('../lib/mlClient');
 
-const ML_URL = process.env.ML_SERVICE_URL || 'http://localhost:5001';
+// Every aggregate is limited to the caller's scope: reps see their own book, managers everything.
+const dealsScope      = (req, where) => scoped(req.user, 'deal', where);
+const contactsScope   = (req, where) => scoped(req.user, 'contact', where);
+const tasksScope      = (req, where) => scoped(req.user, 'task', where);
+const activitiesScope = (req, where) => scoped(req.user, 'activity', where);
 
 /**
  * GET /api/analytics/revenue
@@ -22,10 +27,10 @@ async function revenue(req, res, next) {
     since.setFullYear(since.getFullYear() - 1);
 
     const deals = await prisma.deal.findMany({
-      where: {
+      where: dealsScope(req, {
         stage:     'CLOSED_WON',
         createdAt: { gte: since },
-      },
+      }),
       select: { value: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -48,11 +53,7 @@ async function revenue(req, res, next) {
     // Call ML service for 90-day Prophet forecast
     let forecast = [];
     try {
-      const mlRes = await axios.post(
-        `${ML_URL}/forecast/revenue`,
-        { historical },
-        { timeout: 30_000 }
-      );
+      const mlRes = await ml.post('/forecast/revenue', { historical }, { timeout: 30_000 });
       forecast = mlRes.data.forecast || [];
     } catch (mlErr) {
       console.warn('Forecast service unavailable:', mlErr.message);
@@ -75,9 +76,9 @@ async function pipeline(req, res, next) {
     const results = await Promise.all(
       STAGES.map(async (stage) => {
         const [count, aggregate] = await Promise.all([
-          prisma.deal.count({ where: { stage } }),
+          prisma.deal.count({ where: dealsScope(req, { stage }) }),
           prisma.deal.aggregate({
-            where:  { stage },
+            where:  dealsScope(req, { stage }),
             _sum:   { value: true },
             _avg:   { winProbability: true },
           }),
@@ -112,8 +113,8 @@ async function winLoss(req, res, next) {
     since.setFullYear(since.getFullYear() - 1);
 
     const [won, lost] = await Promise.all([
-      prisma.deal.count({ where: { stage: 'CLOSED_WON',  createdAt: { gte: since } } }),
-      prisma.deal.count({ where: { stage: 'CLOSED_LOST', createdAt: { gte: since } } }),
+      prisma.deal.count({ where: dealsScope(req, { stage: 'CLOSED_WON',  createdAt: { gte: since } }) }),
+      prisma.deal.count({ where: dealsScope(req, { stage: 'CLOSED_LOST', createdAt: { gte: since } }) }),
     ]);
 
     const total   = won + lost;
@@ -121,7 +122,7 @@ async function winLoss(req, res, next) {
 
     // Lost reasons breakdown
     const lostDeals = await prisma.deal.findMany({
-      where:  { stage: 'CLOSED_LOST', createdAt: { gte: since }, lostReason: { not: null } },
+      where:  dealsScope(req, { stage: 'CLOSED_LOST', createdAt: { gte: since }, lostReason: { not: null } }),
       select: { lostReason: true },
     });
 
@@ -146,7 +147,7 @@ async function repPerformance(req, res, next) {
     since.setFullYear(since.getFullYear() - 1);
 
     const users = await prisma.user.findMany({
-      where:  { isActive: true },
+      where:  { isActive: true, ...(!isPrivileged(req.user) && { id: req.user.id }) },
       select: {
         id: true, firstName: true, lastName: true, email: true,
         _count: { select: { deals: true, contacts: true, activities: true } },
@@ -197,10 +198,10 @@ async function sentimentTrends(req, res, next) {
     since.setDate(since.getDate() - 84); // 12 weeks
 
     const activities = await prisma.activity.findMany({
-      where: {
+      where: activitiesScope(req, {
         occurredAt:     { gte: since },
         sentimentScore: { not: null },
-      },
+      }),
       select: { sentimentScore: true, occurredAt: true, sentiment: true },
       orderBy: { occurredAt: 'asc' },
     });
@@ -248,15 +249,15 @@ async function overview(req, res, next) {
       totalDeals, openDeals,
       revenue30d, tasksOverdue,
     ] = await Promise.all([
-      prisma.contact.count(),
-      prisma.contact.count({ where: { createdAt: { gte: since30d } } }),
-      prisma.deal.count(),
-      prisma.deal.count({ where: { stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] } } }),
+      prisma.contact.count({ where: contactsScope(req) }),
+      prisma.contact.count({ where: contactsScope(req, { createdAt: { gte: since30d } }) }),
+      prisma.deal.count({ where: dealsScope(req) }),
+      prisma.deal.count({ where: dealsScope(req, { stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] } }) }),
       prisma.deal.aggregate({
-        where:  { stage: 'CLOSED_WON', createdAt: { gte: since30d } },
+        where:  dealsScope(req, { stage: 'CLOSED_WON', createdAt: { gte: since30d } }),
         _sum:   { value: true },
       }),
-      prisma.task.count({ where: { completed: false, dueDate: { lt: new Date() } } }),
+      prisma.task.count({ where: tasksScope(req, { completed: false, dueDate: { lt: new Date() } }) }),
     ]);
 
     res.json({

@@ -6,13 +6,16 @@
 
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
+const { scopeFor } = require('../middleware/auth.middleware');
 
 const COMPANY_LIST_INCLUDE = {
   _count: { select: { contacts: true } },
 };
 
-const COMPANY_DETAIL_INCLUDE = {
+/** Companies are org-shared; the contact sub-list follows the caller's contact scope. */
+const companyDetailInclude = (user) => ({
   contacts: {
+    where: scopeFor(user, 'contact'),
     orderBy: { createdAt: 'desc' },
     take: 50,
     select: {
@@ -22,7 +25,7 @@ const COMPANY_DETAIL_INCLUDE = {
     },
   },
   _count: { select: { contacts: true } },
-};
+});
 
 function buildWhere({ search, industry, country }) {
   return {
@@ -101,7 +104,7 @@ async function getOne(req, res, next) {
   try {
     const company = await prisma.company.findUnique({
       where:   { id: req.params.id },
-      include: COMPANY_DETAIL_INCLUDE,
+      include: companyDetailInclude(req.user),
     });
 
     if (!company) throw ApiError.notFound('Company not found');
