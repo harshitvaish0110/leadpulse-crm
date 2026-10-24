@@ -1,15 +1,14 @@
 /**
  * LeadPulse CRM — Express Application Factory
- * Updated to mount all Phase 3 routes.
  */
 
 'use strict';
 
+const crypto   = require('crypto');
 const express  = require('express');
 const cors     = require('cors');
 const helmet   = require('helmet');
 const morgan   = require('morgan');
-const path     = require('path');
 
 const authRoutes       = require('./routes/auth.routes');
 const contactRoutes    = require('./routes/contacts.routes');
@@ -20,44 +19,45 @@ const taskRoutes       = require('./routes/tasks.routes');
 const analyticsRoutes  = require('./routes/analytics.routes');
 const aiRoutes         = require('./routes/ai.routes');
 const usersRoutes      = require('./routes/users.routes');
+const settingsRoutes   = require('./routes/settings.routes');
 
-const { errorHandler, notFoundHandler } = require('./middleware/error.middleware');
+const { ApiError, errorHandler, notFoundHandler } = require('./middleware/error.middleware');
+const { allowedOrigins } = require('./lib/env');
+
+const REQUEST_ID = /^[\w.-]{1,100}$/;
 
 function createApp() {
   const app = express();
+  const origins = new Set(allowedOrigins());
 
-  app.use(helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
-    contentSecurityPolicy: false,
-  }));
+  // Render/Vercel terminate TLS in front of us; needed for req.ip and rate limits.
+  if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+
+  app.use((req, res, next) => {
+    const incoming = req.get('x-request-id');
+    req.id = incoming && REQUEST_ID.test(incoming) ? incoming : crypto.randomUUID();
+    res.set('X-Request-Id', req.id);
+    next();
+  });
+
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 
   app.use(cors({
     origin: (origin, callback) => {
-      // Build allowed list: base + any extra production origins from env
-      const base = [
-        'http://localhost:5173',
-        'http://localhost:3000',
-        process.env.CLIENT_URL,
-        process.env.EXTRA_ORIGINS,
-      ].filter(Boolean);
-
-      // Allow any *.vercel.app subdomain (preview deployments)
-      const isVercel = origin && /^https:\/\/[\w-]+\.vercel\.app$/.test(origin);
-
-      if (!origin || base.includes(origin) || isVercel) {
-        return callback(null, true);
-      }
-      return callback(new Error(`CORS: origin ${origin} not allowed`));
+      // No Origin header: same-origin requests, curl, server-to-server.
+      if (!origin || origins.has(origin)) return callback(null, true);
+      callback(new ApiError(`Origin ${origin} is not allowed`, 403, 'CORS_REJECTED'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Request-Id'],
+    exposedHeaders: ['X-Request-Id', 'Retry-After', 'Content-Disposition'],
   }));
 
-  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-  app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
+    skip: () => process.env.NODE_ENV === 'test',
+  }));
+  app.use(express.json({ limit: '1mb' }));
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', service: 'leadpulse-server', timestamp: new Date().toISOString() });
@@ -73,7 +73,7 @@ function createApp() {
   app.use('/api/analytics',  analyticsRoutes);
   app.use('/api/ai',         aiRoutes);
   app.use('/api/users',      usersRoutes);
-  app.use('/api/settings',   usersRoutes); // integrations endpoint
+  app.use('/api/settings',   settingsRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

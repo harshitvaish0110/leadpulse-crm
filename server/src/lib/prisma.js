@@ -27,9 +27,9 @@ const adapter = new PrismaPg(pool);
 
 const prisma = new PrismaClient({
   adapter,
-  log: process.env.NODE_ENV === 'development'
-    ? ['warn', 'error']
-    : ['error'],
+  // Query errors are thrown to callers; the error middleware logs the unexpected ones.
+  // (Logging them here too would flag every scoped 404 as an error.)
+  log: ['warn'],
 });
 
 // Graceful shutdown — close pool on process exit

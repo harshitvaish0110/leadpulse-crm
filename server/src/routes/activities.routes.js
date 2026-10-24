@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto  = require('crypto');
 const path    = require('path');
 const fs      = require('fs');
 const { Router } = require('express');
@@ -16,7 +17,8 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const audioStorage = multer.diskStorage({
   destination: uploadDir,
-  filename:    (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  // Never trust the client's filename (path traversal); the file is deleted after transcription.
+  filename:    (_req, _file, cb) => cb(null, crypto.randomUUID()),
 });
 
 const audioUpload = multer({
@@ -24,7 +26,7 @@ const audioUpload = multer({
   limits:     { fileSize: 25 * 1024 * 1024 }, // 25MB
   fileFilter: (req, file, cb) => {
     const allowed = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/webm', 'audio/ogg', 'audio/flac', 'audio/x-m4a'];
-    if (allowed.includes(file.mimetype)) {
+    if (allowed.includes(file.mimetype.split(';')[0])) {
       cb(null, true);
     } else {
       cb(new Error(`Unsupported audio format: ${file.mimetype}`), false);
