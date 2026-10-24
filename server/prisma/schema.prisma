@@ -1,6 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // LeadPulse CRM — Prisma Schema
 // PostgreSQL 16 + pgvector
+//
+// Source of truth for the data model. Some objects are managed by hand in the
+// migrations (views, triggers, HNSW/GIN indexes on unsupported columns, CHECK
+// constraints). Create migrations with `npx prisma migrate dev --create-only`
+// and remove any DROP of those objects.
 // ─────────────────────────────────────────────────────────────────────────────
 
 generator client {
@@ -19,6 +24,7 @@ datasource db {
 enum Role {
   ADMIN
   SALES_REP
+  MANAGER
 }
 
 enum ContactStatus {
@@ -28,6 +34,8 @@ enum ContactStatus {
   CHURNED
 }
 
+/// Base pipeline stage. ML features and analytics always use these values;
+/// workspace-configurable columns live in `PipelineStage`.
 enum DealStage {
   LEAD
   CONTACTED
@@ -63,9 +71,42 @@ enum EmailStatus {
   DRAFT
   SENT
   FAILED
+  RECEIVED
 }
 
-// ─── MODELS ──────────────────────────────────────────────────────────────────
+enum EmailDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum AiActionType {
+  CREATE_TASK
+  LOG_ACTIVITY
+  UPDATE_DEAL_STAGE
+  DRAFT_EMAIL
+}
+
+enum AiActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  FAILED
+}
+
+enum CustomFieldEntity {
+  CONTACT
+  DEAL
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
+}
+
+// ─── IDENTITY ────────────────────────────────────────────────────────────────
 
 model User {
   id           String    @id @default(uuid())
@@ -79,19 +120,65 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  // Relations
-  contacts     Contact[]    @relation("ContactOwner")
-  deals        Deal[]       @relation("DealOwner")
-  activities   Activity[]
-  tasks        Task[]       @relation("TaskAssignee")
-  createdTasks Task[]       @relation("TaskCreator")
-  emailDrafts  EmailDraft[]
-  aiLogs       AiLog[]
+  contacts         Contact[]          @relation("ContactOwner")
+  deals            Deal[]             @relation("DealOwner")
+  activities       Activity[]
+  tasks            Task[]             @relation("TaskAssignee")
+  createdTasks     Task[]             @relation("TaskCreator")
+  emailDrafts      EmailDraft[]
+  aiLogs           AiLog[]
+  refreshTokens    RefreshToken[]
+  invitationsSent  Invitation[]
+  notifications    Notification[]
+  dealStageChanges DealStageHistory[]
+  attachments      Attachment[]
+  aiConversations  AiConversation[]
+  aiActionRequests AiActionRequest[]
 
   @@index([email])
   @@index([role])
   @@map("users")
 }
+
+model RefreshToken {
+  id           String    @id @default(uuid())
+  userId       String
+  tokenHash    String    @unique
+  familyId     String
+  replacedById String?
+  rotatedAt    DateTime?
+  revokedAt    DateTime?
+  expiresAt    DateTime
+  userAgent    String?
+  ip           String?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model Invitation {
+  id          String    @id @default(uuid())
+  email       String
+  role        Role      @default(SALES_REP)
+  tokenHash   String    @unique
+  invitedById String?
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  invitedBy User? @relation(fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@map("invitations")
+}
+
+// ─── CRM CORE ────────────────────────────────────────────────────────────────
 
 model Company {
   id          String   @id @default(uuid())
@@ -105,7 +192,6 @@ model Company {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // Relations
   contacts Contact[]
 
   @@index([industry])
@@ -122,12 +208,18 @@ model Contact {
   title                String?
   linkedinUrl          String?
   status               ContactStatus @default(LEAD)
+  /// 0–120 points. CHECK constraint enforces the range.
   leadScore            Int           @default(0)
-  leadScoreLabel       String? // HOT | WARM | COLD
+  /// HOT | WARM | COLD
+  leadScoreLabel       String?
   leadScoreExplanation String?
+  /// 0–1 churn probability.
   churnRisk            Float         @default(0)
+  /// 0–1 rolling mean of the last 10 scored activities.
   sentimentScore       Float         @default(0.5)
+  /// { action, reason, urgency, type }
   nextBestAction       Json?
+  nextBestActionAt     DateTime?
   tags                 String[]
   customFields         Json?
   companyId            String?
@@ -135,75 +227,127 @@ model Contact {
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
-  // Relations
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  owner       User?        @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  deals       Deal[]
-  activities  Activity[]
-  tasks       Task[]
-  emailDrafts EmailDraft[]
-  aiLogs      AiLog[]
+  company          Company?          @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner            User?             @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  deals            Deal[]
+  activities       Activity[]
+  tasks            Task[]
+  emailDrafts      EmailDraft[]
+  aiLogs           AiLog[]
+  attachments      Attachment[]
+  aiActionRequests AiActionRequest[]
 
   @@index([status])
   @@index([leadScore])
+  @@index([churnRisk])
   @@index([ownerId])
   @@index([companyId])
   @@index([createdAt])
+  @@index([tags], type: Gin, map: "contacts_tags_gin")
   @@map("contacts")
+}
+
+/// Workspace-configurable Kanban column. The default stage for a base stage is
+/// the one with the lowest `position`.
+model PipelineStage {
+  id        String    @id @default(uuid())
+  label     String
+  color     String    @default("#6366f1")
+  baseStage DealStage
+  position  Int
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  deals Deal[]
+
+  @@index([position])
+  @@index([baseStage])
+  @@map("pipeline_stages")
 }
 
 model Deal {
   id                String    @id @default(uuid())
   title             String
   value             Decimal   @default(0)
+  /// Base stage, always kept in sync with pipelineStage.baseStage.
   stage             DealStage @default(LEAD)
+  pipelineStageId   String?
+  /// 0–1 win probability. 1 at CLOSED_WON, 0 at CLOSED_LOST.
   winProbability    Float     @default(0)
   expectedCloseDate DateTime?
+  stageChangedAt    DateTime  @default(now())
+  closedAt          DateTime?
   lostReason        String?
   notes             String?
+  customFields      Json?
   contactId         String
   ownerId           String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  // Relations
-  contact    Contact    @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  owner      User?      @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  activities Activity[]
-  tasks      Task[]
-  aiLogs     AiLog[]
+  contact          Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  owner            User?              @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  pipelineStage    PipelineStage?     @relation(fields: [pipelineStageId], references: [id], onDelete: SetNull)
+  activities       Activity[]
+  tasks            Task[]
+  aiLogs           AiLog[]
+  stageHistory     DealStageHistory[]
+  attachments      Attachment[]
+  emailDrafts      EmailDraft[]
+  aiActionRequests AiActionRequest[]
 
   @@index([stage])
+  @@index([pipelineStageId])
   @@index([ownerId])
   @@index([contactId])
   @@index([expectedCloseDate])
+  @@index([closedAt])
   @@index([createdAt])
   @@map("deals")
 }
 
+model DealStageHistory {
+  id          String     @id @default(uuid())
+  dealId      String
+  fromStage   DealStage?
+  toStage     DealStage
+  fromStageId String?
+  toStageId   String?
+  changedById String?
+  changedAt   DateTime   @default(now())
+
+  deal      Deal  @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  changedBy User? @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([dealId, changedAt])
+  @@map("deal_stage_history")
+}
+
 model Activity {
-  id              String         @id @default(uuid())
+  id              String          @id @default(uuid())
   type            ActivityType
   subject         String?
   notes           String?
   sentiment       SentimentLabel?
   sentimentScore  Float?
   transcript      String?
-  audioUrl        String?
+  /// Storage key of the call recording (never a public URL).
+  audioKey        String?
   durationMinutes Int?
-  metadata        Json? // Stores structured extraction from transcription
+  /// Call transcript extraction: { status, summary, actionItems[], objections[], … }
+  metadata        Json?
   contactId       String
   dealId          String?
   userId          String
-  occurredAt      DateTime       @default(now())
-  createdAt       DateTime       @default(now())
+  occurredAt      DateTime        @default(now())
+  createdAt       DateTime        @default(now())
 
-  // Relations
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   deal    Deal?   @relation(fields: [dealId], references: [id], onDelete: SetNull)
   user    User    @relation(fields: [userId], references: [id])
 
   @@index([contactId])
+  @@index([contactId, occurredAt(sort: Desc)], map: "activities_contact_occurred_idx")
   @@index([dealId])
   @@index([userId])
   @@index([type])
@@ -212,21 +356,22 @@ model Activity {
 }
 
 model Task {
-  id           String       @id @default(uuid())
-  title        String
-  description  String?
-  dueDate      DateTime?
-  priority     TaskPriority @default(MEDIUM)
-  completed    Boolean      @default(false)
-  completedAt  DateTime?
-  contactId    String?
-  dealId       String?
-  assignedToId String
-  createdById  String
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id                String       @id @default(uuid())
+  title             String
+  description       String?
+  dueDate           DateTime?
+  priority          TaskPriority @default(MEDIUM)
+  completed         Boolean      @default(false)
+  completedAt       DateTime?
+  dueSoonNotifiedAt DateTime?
+  overdueNotifiedAt DateTime?
+  contactId         String?
+  dealId            String?
+  assignedToId      String
+  createdById       String
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
-  // Relations
   contact    Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
   deal       Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
   assignedTo User     @relation("TaskAssignee", fields: [assignedToId], references: [id])
@@ -239,58 +384,274 @@ model Task {
   @@map("tasks")
 }
 
+/// Email workspace: AI/hand-written drafts, sent mail and logged inbound mail.
 model EmailDraft {
-  id          String      @id @default(uuid())
+  id          String         @id @default(uuid())
+  direction   EmailDirection @default(OUTBOUND)
+  status      EmailStatus    @default(DRAFT)
   subject     String?
   body        String
-  status      EmailStatus @default(DRAFT)
-  aiGenerated Boolean     @default(false)
+  aiGenerated Boolean        @default(false)
+  tone        String?
   sentAt      DateTime?
+  receivedAt  DateTime?
   contactId   String
-  createdById String
-  createdAt   DateTime    @default(now())
+  dealId      String?
+  createdById String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @default(now()) @updatedAt
 
-  // Relations
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  createdBy User    @relation(fields: [createdById], references: [id])
+  deal      Deal?   @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  createdBy User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([contactId])
+  @@index([contactId, createdAt])
   @@index([status])
   @@map("email_drafts")
 }
 
-model Embedding {
-  id         String                       @id @default(uuid())
-  recordType String
-  recordId   String
-  content    String
-  vector     Unsupported("vector(1536)")?
-  createdAt  DateTime                     @default(now())
-  updatedAt  DateTime                     @updatedAt
+model Attachment {
+  id           String   @id @default(uuid())
+  dealId       String?
+  contactId    String?
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String   @unique
+  uploadedById String?
+  createdAt    DateTime @default(now())
 
-  @@unique([recordType, recordId])
+  deal       Deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contact    Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([dealId])
+  @@index([contactId])
+  @@map("attachments")
+}
+
+// ─── INTELLIGENCE ────────────────────────────────────────────────────────────
+
+/// Semantic index. `vector` (HNSW cosine) and `contentTsv` (generated, GIN) are
+/// hand-managed in the migrations; never let a generated migration drop them.
+model Embedding {
+  id          String                      @id @default(uuid())
+  recordType  String
+  recordId    String
+  chunkIndex  Int                         @default(0)
+  content     String
+  contentHash String
+  vector      Unsupported("vector(384)")?
+  contentTsv  Unsupported("tsvector")?    @default(dbgenerated("to_tsvector('english'::regconfig, content)"))
+  createdAt   DateTime                    @default(now())
+  updatedAt   DateTime                    @updatedAt
+
+  @@unique([recordType, recordId, chunkIndex])
   @@index([recordType, recordId])
   @@map("embeddings")
 }
 
-model AiLog {
+/// Point-in-time score history for AI Insights charts (polymorphic, no FK).
+model ScoreSnapshot {
   id         String   @id @default(uuid())
-  feature    String
-  contactId  String?
-  dealId     String?
-  userId     String
-  input      Json
-  output     Json
-  tokensUsed Int      @default(0)
-  createdAt  DateTime @default(now())
+  entityType String
+  entityId   String
+  metric     String
+  value      Float
+  takenAt    DateTime @default(now())
 
-  // Relations
+  @@index([entityType, entityId, metric, takenAt])
+  @@map("score_snapshots")
+}
+
+model AiLog {
+  id           String   @id @default(uuid())
+  feature      String
+  provider     String?
+  model        String?
+  status       String   @default("ok")
+  latencyMs    Int?
+  errorMessage String?
+  contactId    String?
+  dealId       String?
+  userId       String?
+  input        Json
+  output       Json?
+  tokensUsed   Int      @default(0)
+  createdAt    DateTime @default(now())
+
   contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
   deal    Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  user    User     @relation(fields: [userId], references: [id])
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([feature])
   @@index([userId])
   @@index([createdAt])
+  @@index([provider, createdAt])
   @@map("ai_logs")
+}
+
+model AiConversation {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String   @default("New chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages       AiMessage[]
+  actionRequests AiActionRequest[]
+
+  @@index([userId, updatedAt])
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String
+  content        String
+  sources        Json?
+  provider       String?
+  createdAt      DateTime @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// Approval gate: AI-proposed writes wait here until a human approves them.
+model AiActionRequest {
+  id             String         @id @default(uuid())
+  userId         String
+  type           AiActionType
+  payload        Json
+  rationale      String?
+  risk           String
+  status         AiActionStatus @default(PENDING)
+  source         String
+  conversationId String?
+  contactId      String?
+  dealId         String?
+  result         Json?
+  error          String?
+  decidedById    String?
+  decidedAt      DateTime?
+  executedAt     DateTime?
+  createdAt      DateTime       @default(now())
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  deal         Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@map("ai_action_requests")
+}
+
+// ─── PLATFORM ────────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  link      String?
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+/// Insert-only (enforced by a trigger). No foreign keys so cascades never touch it.
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  requestId  String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Singleton row (id = 1).
+model OrgSettings {
+  id                Int       @id @default(1)
+  companyName       String    @default("LeadPulse")
+  timezone          String    @default("Asia/Kolkata")
+  currency          String    @default("USD")
+  logoKey           String?
+  lastFullReindexAt DateTime?
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  @@map("org_settings")
+}
+
+model Tag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  color     String   @default("#6366f1")
+  /// Lead-source tag shown in the Analytics lead-source chart.
+  isSource  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("tags")
+}
+
+model CustomFieldDefinition {
+  id        String            @id @default(uuid())
+  entity    CustomFieldEntity
+  key       String
+  label     String
+  type      CustomFieldType
+  options   Json?
+  required  Boolean           @default(false)
+  position  Int               @default(0)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@unique([entity, key])
+  @@map("custom_field_definitions")
+}
+
+model IntegrationCredential {
+  id             String   @id @default(uuid())
+  provider       String   @unique
+  /// AES-256-GCM: v1:<iv>:<tag>:<ciphertext>
+  encryptedValue String
+  updatedById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("integration_credentials")
+}
+
+model Webhook {
+  id               String   @id @default(uuid())
+  url              String
+  events           String[]
+  secretEncrypted  String
+  isActive         Boolean  @default(true)
+  /// Ring buffer of the last 20 delivery results.
+  recentDeliveries Json     @default("[]")
+  createdById      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("webhooks")
 }
