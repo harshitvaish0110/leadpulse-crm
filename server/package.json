@@ -11,10 +11,8 @@
     "migrate:reset": "npx prisma migrate reset --force",
     "generate": "npx prisma generate",
     "studio": "npx prisma studio",
-    "test": "node --test \"test/unit/**/*.test.js\""
-  },
-  "prisma": {
-    "seed": "node prisma/seed.js"
+    "test": "node --test \"test/unit/**/*.test.js\"",
+    "test:integration": "node --test --test-concurrency=1 \"test/integration/**/*.test.js\""
   },
   "keywords": [],
   "author": "",
