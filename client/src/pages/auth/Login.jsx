@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
-import { useAuthStore } from '../../store/authStore';
-import api from '../../api/axiosInstance';
+import { useAuthStore, safeNext } from '../../store/authStore';
+import { authApi } from '../../api/axiosInstance';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import toast from 'react-hot-toast';
@@ -10,23 +10,28 @@ import toast from 'react-hot-toast';
 export default function Login() {
   const [form, setForm] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
-  const { login } = useAuthStore();
+  const status = useAuthStore((s) => s.status);
+  const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const next = safeNext(params.get('next'));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data } = await api.post('/api/auth/login', form);
-      login(data.token, data.user);
+      const { data } = await authApi.post('/api/auth/login', form);
+      setSession(data.accessToken, data.user);
       toast.success(`Welcome back, ${data.user.firstName}!`);
-      navigate('/dashboard');
+      navigate(next, { replace: true });
     } catch (err) {
       toast.error(err.response?.data?.error || 'Login failed');
     } finally {
       setLoading(false);
     }
   };
+
+  if (status === 'authenticated') return <Navigate to={next} replace />;
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">

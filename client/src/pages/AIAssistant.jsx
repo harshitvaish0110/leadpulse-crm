@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Send, Sparkles, PlusCircle, Bot, User, Loader2, ExternalLink } from 'lucide-react';
+import { API_BASE } from '../api/axiosInstance';
 
 const NO_MESSAGES = [];
 
@@ -12,7 +13,6 @@ const SUGGESTIONS = [
   'What was the outcome of my last call with Acme?',
 ];
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 function SourceChip({ source }) {
   const navigate = useNavigate();

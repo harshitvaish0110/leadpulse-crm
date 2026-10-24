@@ -1,13 +1,10 @@
 import { useState } from 'react';
 import { Wand2, Copy, RefreshCw, CheckCircle2 } from 'lucide-react';
 import Button from '../ui/Button';
-import { useAuthStore } from '../../store/authStore';
+import { authFetch } from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-
 export default function EmailComposer({ contactId, dealId, onEmailReady }) {
-  const { token } = useAuthStore();
   const [bullets,  setBullets]  = useState('');
   const [subject,  setSubject]  = useState('');
   const [body,     setBody]     = useState('');
@@ -24,11 +21,10 @@ export default function EmailComposer({ contactId, dealId, onEmailReady }) {
     setCopied(false);
 
     try {
-      const response = await fetch(`${API_BASE}/api/ai/compose-email`, {
+      const response = await authFetch(`/api/ai/compose-email`, {
         method:  'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization:  `Bearer ${token}`,
         },
         body: JSON.stringify({ contactId, dealId, bulletPoints: bulletList }),
       });
