@@ -99,7 +99,5 @@ export function useSocket() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [user?.id, token]);
-
-  return socketRef.current;
+  }, [user?.id, token]); // eslint-disable-line react-hooks/exhaustive-deps -- store actions and queryClient are stable; reconnect only on identity change (reworked in M2)
 }

@@ -69,7 +69,7 @@ export default function DealSummaryPanel({ dealId }) {
               // Non-streaming JSON response (fallback)
               setSummary(parsed.summary);
             }
-          } catch {}
+          } catch { /* ignore partial or non-JSON SSE line */ }
         }
       }
       setGenerated(true);

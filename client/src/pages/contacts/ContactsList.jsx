@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Upload, Download, Search, Trash2, Edit2, MoreHorizontal } from 'lucide-react';
+import { UserPlus, Upload, Download, Search, Trash2, Edit2 } from 'lucide-react';
 import { getContacts, createContact, deleteContact, exportContacts, importContacts } from '../../api/contacts';
 import { getCompanies } from '../../api/companies';
 import Button from '../../components/ui/Button';
@@ -80,21 +80,6 @@ function ContactForm({ onSuccess, onClose }) {
       </div>
     </form>
   );
-}
-
-function useDebounce(value, delay) {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-  const timerRef = useState(null);
-
-  const updateDebounced = useCallback((val) => {
-    if (timerRef[0]) clearTimeout(timerRef[0]);
-    timerRef[0] = setTimeout(() => setDebouncedValue(val), delay);
-  }, [delay]);
-
-  // Synchronous update for mount
-  useState(() => { updateDebounced(value); }, [value]);
-
-  return debouncedValue;
 }
 
 export default function ContactsList() {
