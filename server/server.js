@@ -12,12 +12,21 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }
 const http    = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 
-const { createApp } = require('./src/app');
-const { prisma }    = require('./src/lib/prisma');
+const { createApp }   = require('./src/app');
+const { prisma }      = require('./src/lib/prisma');
+const { validateEnv } = require('./src/lib/env');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 async function bootstrap() {
+  // ── Fail fast on missing/weak configuration ─────────────────────────────────
+  const { errors, warnings } = validateEnv();
+  warnings.forEach((w) => console.warn(`⚠  ${w}`));
+  if (errors.length) {
+    errors.forEach((e) => console.error(`✗  ${e}`));
+    process.exit(1);
+  }
+
   // ── Verify DB connectivity before accepting traffic ─────────────────────────
   try {
     await prisma.$queryRawUnsafe('SELECT 1');
