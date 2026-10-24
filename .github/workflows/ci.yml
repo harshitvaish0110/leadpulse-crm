@@ -12,6 +12,21 @@ concurrency:
 jobs:
   server:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: leadpulse_test
+          POSTGRES_USER: leadpulse
+          POSTGRES_PASSWORD: leadpulse_secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U leadpulse -d leadpulse_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://leadpulse:leadpulse_secret@localhost:5432/leadpulse_test?schema=public
+      JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+      NODE_ENV: test
     defaults:
       run:
         working-directory: server
@@ -29,8 +44,11 @@ jobs:
             echo "::error::A migration drops a hand-managed index/trigger/view; remove the DROP from the migration"
             exit 1
           fi
-      - run: DATABASE_URL="postgresql://ci:ci@localhost:5432/ci" npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npx prisma generate
       - run: npm test
+      - name: Seed and run schema guard tests
+        run: npm run seed && npm run test:integration
 
   ml:
     runs-on: ubuntu-latest
