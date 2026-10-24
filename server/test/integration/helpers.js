@@ -1,0 +1,40 @@
+'use strict';
+
+/**
+ * Shared setup for API integration tests. Requires a migrated, seeded database
+ * at DATABASE_URL (the demo seed provides the users below, password "password123").
+ */
+
+process.env.NODE_ENV = 'test'; // disables rate limits and request logging
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env'), quiet: true });
+
+const request = require('supertest');
+const { createApp } = require('../../src/app');
+const { prisma, pool } = require('../../src/lib/prisma');
+
+const app = createApp();
+const startedAt = new Date();
+
+const bearer = (token) => ({ Authorization: `Bearer ${token}` });
+
+/** Logs in a seeded user; returns `{ token, cookie, user }`. */
+async function login(email, password = 'password123') {
+  const res = await request(app).post('/api/auth/login').send({ email, password });
+  if (res.status !== 200) throw new Error(`login ${email} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  return { token: res.body.accessToken, cookie: refreshCookie(res), user: res.body.user };
+}
+
+/** `lp_rt=<value>` from a response's Set-Cookie header, or null. */
+function refreshCookie(res) {
+  const raw = [].concat(res.headers['set-cookie'] || []).find((c) => c.startsWith('lp_rt='));
+  return raw ? raw.split(';')[0] : null;
+}
+
+/** Removes refresh tokens created by this test file, then closes the pool. */
+async function teardown() {
+  await prisma.refreshToken.deleteMany({ where: { createdAt: { gte: startedAt } } });
+  await prisma.$disconnect();
+  await pool.end().catch(() => {});
+}
+
+module.exports = { app, request, prisma, bearer, login, refreshCookie, teardown };
