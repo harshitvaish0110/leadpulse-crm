@@ -10,7 +10,8 @@
     "migrate": "npx prisma migrate dev",
     "migrate:reset": "npx prisma migrate reset --force",
     "generate": "npx prisma generate",
-    "studio": "npx prisma studio"
+    "studio": "npx prisma studio",
+    "test": "node --test \"test/unit/**/*.test.js\""
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@faker-js/faker": "^10.4.0",
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "supertest": "^7.3.1"
   }
 }
