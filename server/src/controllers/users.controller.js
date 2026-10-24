@@ -1,106 +1,89 @@
+/**
+ * LeadPulse CRM — Users Controller
+ * Role checks live in users.routes.js; everything except `directory` is ADMIN only.
+ */
+
 'use strict';
 
-const bcrypt     = require('bcryptjs');
-const { prisma } = require('../lib/prisma');
+const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
+const { allowedOrigins } = require('../lib/env');
+const { createInvitation, revokeAllForUser } = require('../services/session.service');
 
-function adminOnly(req) {
-  if (req.user.role !== 'ADMIN') throw ApiError.forbidden('Admin only');
+const PUBLIC_USER = { id: true, email: true, firstName: true, lastName: true, role: true, isActive: true };
+
+const inviteUrl = (token) =>
+  `${(process.env.APP_URL || allowedOrigins()[0]).replace(/\/$/, '')}/accept-invite?token=${token}`;
+
+/** GET /api/users/directory — any role; feeds owner and assignee pickers. */
+async function directory(_req, res) {
+  const users = await prisma.user.findMany({
+    where: { isActive: true },
+    select: { id: true, firstName: true, lastName: true, role: true },
+    orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+  });
+  res.json({ success: true, users });
 }
 
-/**
- * GET /api/users
- * List all users with last-login and counts. Admin only.
- */
-async function listUsers(req, res, next) {
-  try {
-    adminOnly(req);
-    const users = await prisma.user.findMany({
+/** GET /api/users */
+async function listUsers(_req, res) {
+  const [users, invitations] = await Promise.all([
+    prisma.user.findMany({
       select: {
-        id: true, email: true, firstName: true, lastName: true,
-        role: true, isActive: true, lastLoginAt: true, createdAt: true,
+        ...PUBLIC_USER, lastLoginAt: true, createdAt: true,
         _count: { select: { contacts: true, deals: true, activities: true } },
       },
       orderBy: { createdAt: 'asc' },
-    });
-    res.json({ success: true, users });
-  } catch (err) { next(err); }
-}
-
-/**
- * PATCH /api/users/:id
- * Update role or isActive. Admin only.
- */
-async function updateUser(req, res, next) {
-  try {
-    adminOnly(req);
-    const { role, isActive } = req.body;
-
-    // Prevent admin from deactivating themselves
-    if (req.params.id === req.user.id && isActive === false) {
-      throw ApiError.badRequest('You cannot deactivate your own account');
-    }
-
-    const allowed = {};
-    if (role     !== undefined) allowed.role     = role;
-    if (isActive !== undefined) allowed.isActive = isActive;
-
-    const user = await prisma.user.update({
-      where:  { id: req.params.id },
-      data:   allowed,
-      select: { id: true, email: true, firstName: true, lastName: true, role: true, isActive: true },
-    });
-    res.json({ success: true, user });
-  } catch (err) { next(err); }
-}
-
-/**
- * POST /api/users/invite
- * Create a new user with a temporary password. Admin only.
- * The invited user should reset their password on first login.
- */
-async function inviteUser(req, res, next) {
-  try {
-    adminOnly(req);
-    const { email, firstName, lastName, role = 'SALES_REP' } = req.body;
-
-    if (!email || !firstName || !lastName) {
-      throw ApiError.badRequest('email, firstName and lastName are required');
-    }
-
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) throw ApiError.badRequest('A user with this email already exists');
-
-    // Temporary password — user should change this on first login
-    const tempPassword = `LP_${Math.random().toString(36).slice(2, 10).toUpperCase()}!`;
-    const passwordHash = await bcrypt.hash(tempPassword, 12);
-
-    const user = await prisma.user.create({
-      data:   { email, firstName, lastName, role, passwordHash },
-      select: { id: true, email: true, firstName: true, lastName: true, role: true, isActive: true },
-    });
-
-    // In production: send email with tempPassword via SMTP
-    // For now: return it in the response so admin can share it manually
-    res.status(201).json({ success: true, user, tempPassword });
-  } catch (err) { next(err); }
-}
-
-/**
- * GET /api/settings/integrations
- * Returns which API integrations are configured (key present in env).
- * Never exposes actual key values.
- */
-async function getIntegrationStatus(_req, res) {
+    }),
+    prisma.invitation.findMany({
+      where: { acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+      select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
   res.json({
     success: true,
-    integrations: {
-      anthropic: !!process.env.ANTHROPIC_API_KEY,
-      openai:    !!process.env.OPENAI_API_KEY,
-      clearbit:  !!process.env.CLEARBIT_API_KEY,
-      smtp:      !!process.env.SMTP_HOST,
-    },
+    users: users.map((u) => ({ ...u, status: u.isActive ? 'active' : 'inactive' })),
+    invitations,
   });
 }
 
-module.exports = { listUsers, updateUser, inviteUser, getIntegrationStatus };
+/** PATCH /api/users/:id — role and/or isActive; deactivation ends every session. */
+async function updateUser(req, res) {
+  const { role, isActive } = req.body;
+  const self = req.params.id === req.user.id;
+  if (self && isActive === false) throw ApiError.badRequest('You cannot deactivate your own account');
+  if (self && role && role !== 'ADMIN') throw ApiError.badRequest('You cannot remove your own admin role');
+
+  const user = await prisma.user.update({
+    where:  { id: req.params.id },
+    data:   { ...(role !== undefined && { role }), ...(isActive !== undefined && { isActive }) },
+    select: PUBLIC_USER,
+  });
+  if (isActive === false) await revokeAllForUser(user.id);
+  res.json({ success: true, user });
+}
+
+/**
+ * POST /api/users/invite — single-use link valid for 72 h.
+ * Invites are not emailed yet, so the link is returned for the admin to share.
+ */
+async function inviteUser(req, res) {
+  const { email, role = 'SALES_REP' } = req.body;
+  const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+  if (existing) throw ApiError.conflict('A user with this email already exists');
+
+  const { invitation, token } = await createInvitation({ email, role, invitedById: req.user.id });
+  res.status(201).json({ success: true, invitation, inviteUrl: inviteUrl(token) });
+}
+
+/** DELETE /api/users/invitations/:id */
+async function revokeInvitation(req, res) {
+  await prisma.invitation.update({
+    where: { id: req.params.id, acceptedAt: null },
+    data:  { revokedAt: new Date() },
+  });
+  res.status(204).end();
+}
+
+module.exports = { directory, listUsers, updateUser, inviteUser, revokeInvitation };

@@ -1,236 +1,152 @@
 /**
  * LeadPulse CRM — Auth Controller
  *
- * Handles user registration, login, and profile retrieval.
- * Passwords are bcrypt-hashed. JWTs are signed with HS256.
+ * Login, registration and invite acceptance start a session: a refresh-token
+ * cookie plus a short-lived access token in the response body.
  */
 
 'use strict';
 
 const bcrypt = require('bcryptjs');
-const jwt    = require('jsonwebtoken');
-const { validationResult } = require('express-validator');
 
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
+const session      = require('../services/session.service');
 
-const JWT_SECRET     = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+// A real bcrypt hash so unknown emails cost the same as a wrong password.
+const DUMMY_HASH = '$2b$12$u2iKNVsAnMfU468txFmaXe3z8/eHrTlMNXxiYRVQ..9OoM0dLzVrC';
+const { USER_SELECT } = session;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Signs a JWT for the given userId.
- */
-function signToken(userId) {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-}
-
-/**
- * Checks express-validator results and throws if there are errors.
- */
-function assertValid(req) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    throw ApiError.badRequest('Validation failed', errors.array());
+/** Role for a self-registration, or 403 when sign-up is closed. */
+async function signupRole(email) {
+  const bootstrap = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+  if (bootstrap && email === bootstrap) {
+    const admins = await prisma.user.count({ where: { role: 'ADMIN' } });
+    if (admins === 0) return 'ADMIN';
   }
+  if (process.env.ALLOW_SIGNUP === 'true') return 'SALES_REP';
+  throw ApiError.forbidden('Registration is invite-only', 'REGISTRATION_CLOSED');
 }
 
-// ── Controllers ───────────────────────────────────────────────────────────────
+async function createUser({ email, password, firstName, lastName, role }) {
+  const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+  if (existing) throw ApiError.conflict('An account with this email already exists');
+  return prisma.user.create({
+    data: { email, passwordHash: await bcrypt.hash(password, 12), firstName, lastName, role, lastLoginAt: new Date() },
+    select: USER_SELECT,
+  });
+}
 
-/**
- * POST /api/auth/register
- * Creates a new SALES_REP account (only ADMINs can promote to ADMIN via settings).
- */
-async function register(req, res, next) {
-  try {
-    assertValid(req);
+/** POST /api/auth/register */
+async function register(req, res) {
+  const role = await signupRole(req.body.email);
+  const user = await createUser({ ...req.body, role });
+  const accessToken = await session.issueSession(res, user, req);
+  res.status(201).json({ success: true, accessToken, user });
+}
 
-    const { email, password, firstName, lastName } = req.body;
+/** POST /api/auth/login */
+async function login(req, res) {
+  const { email, password } = req.body;
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { ...USER_SELECT, passwordHash: true },
+  });
 
-    // Check duplicate before hashing to short-circuit early
-    const existing = await prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() },
-      select: { id: true },
-    });
-    if (existing) throw ApiError.conflict('An account with this email already exists');
+  const passwordOk = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+  if (!user || !passwordOk) throw ApiError.unauthorized('Invalid email or password', 'INVALID_CREDENTIALS');
+  if (!user.isActive) throw ApiError.forbidden('This account has been deactivated', 'ACCOUNT_DISABLED');
 
-    const passwordHash = await bcrypt.hash(password, 12);
+  const { passwordHash: _omit, ...safeUser } = user;
+  safeUser.lastLoginAt = new Date();
+  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: safeUser.lastLoginAt } });
 
-    const user = await prisma.user.create({
-      data: {
-        email:     email.toLowerCase().trim(),
-        passwordHash,
-        firstName: firstName.trim(),
-        lastName:  lastName.trim(),
-        role:      'SALES_REP',
-      },
-      select: {
-        id: true, email: true, firstName: true,
-        lastName: true, role: true, createdAt: true,
-      },
-    });
+  const accessToken = await session.issueSession(res, safeUser, req);
+  res.json({ success: true, accessToken, user: safeUser });
+}
 
-    const token = signToken(user.id);
+/** POST /api/auth/refresh — requires `X-Requested-With` (CSRF guard; the cookie is SameSite=Lax). */
+async function refresh(req, res) {
+  if (!req.get('x-requested-with')) throw ApiError.forbidden('Missing X-Requested-With header', 'CSRF_HEADER_REQUIRED');
+  const { accessToken, user } = await session.refreshSession(req, res);
+  res.json({ success: true, accessToken, user });
+}
 
-    res.status(201).json({
-      success: true,
-      token,
-      user,
-    });
-  } catch (err) {
-    next(err);
+/** POST /api/auth/logout */
+async function logout(req, res) {
+  await session.endSession(req, res);
+  res.status(204).end();
+}
+
+/** GET /api/auth/invite/:token */
+async function getInvite(req, res) {
+  const invitation = await session.findValidInvitation(req.params.token);
+  if (!invitation) throw ApiError.notFound('This invitation is invalid or has expired', 'INVITE_INVALID');
+  const { email, role, expiresAt } = invitation;
+  res.json({ success: true, invitation: { email, role, expiresAt } });
+}
+
+/** POST /api/auth/accept-invite */
+async function acceptInvite(req, res) {
+  const { token, firstName, lastName, password } = req.body;
+  const invitation = await session.findValidInvitation(token);
+  if (!invitation) throw ApiError.notFound('This invitation is invalid or has expired', 'INVITE_INVALID');
+
+  const user = await createUser({ email: invitation.email, password, firstName, lastName, role: invitation.role });
+  await prisma.invitation.update({ where: { id: invitation.id }, data: { acceptedAt: new Date() } });
+
+  const accessToken = await session.issueSession(res, user, req);
+  res.status(201).json({ success: true, accessToken, user });
+}
+
+/** GET /api/auth/me */
+async function getMe(req, res) {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: {
+      ...USER_SELECT,
+      createdAt: true,
+      _count: { select: { contacts: true, deals: true, activities: true, tasks: true } },
+    },
+  });
+  if (!user) throw ApiError.notFound('User not found');
+  res.json({ success: true, user });
+}
+
+/** PATCH /api/auth/me */
+async function updateMe(req, res) {
+  const { firstName, lastName, email } = req.body;
+
+  if (email && email !== req.user.email) {
+    const taken = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (taken) throw ApiError.conflict('Email is already in use');
   }
+
+  const user = await prisma.user.update({
+    where: { id: req.user.id },
+    data: {
+      ...(firstName && { firstName }),
+      ...(lastName && { lastName }),
+      ...(email && { email }),
+    },
+    select: { ...USER_SELECT, updatedAt: true },
+  });
+  res.json({ success: true, user });
 }
 
-/**
- * POST /api/auth/login
- */
-async function login(req, res, next) {
-  try {
-    assertValid(req);
+/** POST /api/auth/change-password — also signs out every other session. */
+async function changePassword(req, res) {
+  const { currentPassword, newPassword } = req.body;
+  const { passwordHash } = await prisma.user.findUnique({ where: { id: req.user.id }, select: { passwordHash: true } });
 
-    const { email, password } = req.body;
-
-    // Use select to include passwordHash (excluded by default in most queries)
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() },
-      select: {
-        id: true, email: true, firstName: true, lastName: true,
-        role: true, isActive: true, passwordHash: true,
-      },
-    });
-
-    // Use constant-time comparison to prevent user enumeration via timing
-    const dummyHash = '$2b$12$invalidhashforcomparison000000000000000000000000000';
-    const hashToCompare = user?.passwordHash ?? dummyHash;
-    const passwordOk = await bcrypt.compare(password, hashToCompare);
-
-    if (!user || !passwordOk) {
-      throw ApiError.unauthorized('Invalid email or password');
-    }
-    if (!user.isActive) {
-      throw ApiError.forbidden('This account has been deactivated');
-    }
-
-    // Update lastLoginAt non-blocking (don't await — not critical path)
-    prisma.user.update({
-      where: { id: user.id },
-      data:  { lastLoginAt: new Date() },
-    }).catch(() => {}); // silently ignore
-
-    const token = signToken(user.id);
-
-    // Strip the hash before sending
-    const { passwordHash: _omit, ...safeUser } = user;
-
-    res.json({
-      success: true,
-      token,
-      user: safeUser,
-    });
-  } catch (err) {
-    next(err);
+  if (!(await bcrypt.compare(currentPassword, passwordHash))) {
+    throw ApiError.unauthorized('Current password is incorrect', 'INVALID_CREDENTIALS');
   }
+
+  await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash: await bcrypt.hash(newPassword, 12) } });
+  await session.revokeAllForUser(req.user.id);
+  const accessToken = await session.issueSession(res, req.user, req);
+  res.json({ success: true, message: 'Password changed successfully', accessToken });
 }
 
-/**
- * GET /api/auth/me
- * Returns the currently authenticated user's profile.
- */
-async function getMe(req, res, next) {
-  try {
-    // req.user is already populated by authenticate middleware
-    // but re-fetch to include company/stats if needed later
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: {
-        id: true, email: true, firstName: true, lastName: true,
-        role: true, isActive: true, lastLoginAt: true, createdAt: true,
-        _count: {
-          select: {
-            contacts:   true,
-            deals:      true,
-            activities: true,
-            tasks:      true,
-          },
-        },
-      },
-    });
-
-    if (!user) throw ApiError.notFound('User not found');
-
-    res.json({ success: true, user });
-  } catch (err) {
-    next(err);
-  }
-}
-
-/**
- * PATCH /api/auth/me
- * Updates the current user's profile (name, email).
- */
-async function updateMe(req, res, next) {
-  try {
-    assertValid(req);
-
-    const { firstName, lastName, email } = req.body;
-
-    // If changing email, check it's not taken
-    if (email && email.toLowerCase().trim() !== req.user.email) {
-      const taken = await prisma.user.findUnique({
-        where: { email: email.toLowerCase().trim() },
-        select: { id: true },
-      });
-      if (taken) throw ApiError.conflict('Email is already in use');
-    }
-
-    const updated = await prisma.user.update({
-      where: { id: req.user.id },
-      data: {
-        ...(firstName && { firstName: firstName.trim() }),
-        ...(lastName  && { lastName:  lastName.trim()  }),
-        ...(email     && { email:     email.toLowerCase().trim() }),
-      },
-      select: {
-        id: true, email: true, firstName: true,
-        lastName: true, role: true, updatedAt: true,
-      },
-    });
-
-    res.json({ success: true, user: updated });
-  } catch (err) {
-    next(err);
-  }
-}
-
-/**
- * POST /api/auth/change-password
- */
-async function changePassword(req, res, next) {
-  try {
-    assertValid(req);
-
-    const { currentPassword, newPassword } = req.body;
-
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: { passwordHash: true },
-    });
-
-    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!valid) throw ApiError.unauthorized('Current password is incorrect');
-
-    const passwordHash = await bcrypt.hash(newPassword, 12);
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data:  { passwordHash },
-    });
-
-    res.json({ success: true, message: 'Password changed successfully' });
-  } catch (err) {
-    next(err);
-  }
-}
-
-module.exports = { register, login, getMe, updateMe, changePassword };
+module.exports = { register, login, refresh, logout, getInvite, acceptInvite, getMe, updateMe, changePassword };
