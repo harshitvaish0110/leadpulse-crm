@@ -26,13 +26,16 @@ services:
     ports:
       - "3001:3001"
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://leadpulse:leadpulse_secret@postgres:5432/leadpulse_db
+      ML_SERVICE_URL: http://ml-service:5001
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./server:/app
       - /app/node_modules
-    command: npm run dev
+    command: sh -c "npx prisma migrate deploy && npm run dev"
 
   ml-service:
     build:
@@ -43,6 +46,8 @@ services:
     ports:
       - "5001:5001"
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://leadpulse:leadpulse_secret@postgres:5432/leadpulse_db
     depends_on:
       postgres:
         condition: service_healthy
