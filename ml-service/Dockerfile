@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 5001
 
-CMD ["python", "app.py"]
+CMD ["gunicorn", "app:create_app()", "--bind", "0.0.0.0:5001", "--workers", "1", "--threads", "4", "--timeout", "120"]
