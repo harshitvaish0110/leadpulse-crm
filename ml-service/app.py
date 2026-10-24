@@ -4,10 +4,11 @@ Provides sentiment analysis, lead/churn scoring, revenue forecasting,
 RAG pipeline, and audio transcription endpoints.
 """
 
+import hmac
 import os
-from flask import Flask, jsonify
-from flask_cors import CORS
+from flask import Flask, jsonify, request
 from dotenv import load_dotenv
+from werkzeug.exceptions import HTTPException
 
 load_dotenv()
 
@@ -16,7 +17,21 @@ def create_app():
     """Application factory for the Flask ML service."""
     app = Flask(__name__)
 
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    # Only the API server calls this service (no browser access, so no CORS).
+    # Every route except /health needs X-ML-Token; without a token configured
+    # the check is skipped in development and everything is refused in production.
+    token = os.getenv("ML_SERVICE_TOKEN", "")
+    production = os.getenv("FLASK_ENV") == "production"
+
+    @app.before_request
+    def require_token():
+        if request.path == "/health":
+            return None
+        if not token:
+            return (jsonify({"error": "ML_SERVICE_TOKEN is not configured"}), 503) if production else None
+        if not hmac.compare_digest(request.headers.get("X-ML-Token", ""), token):
+            return jsonify({"error": "Unauthorized"}), 401
+        return None
 
     # ── Register blueprints ────────────────────────────────
     from routes.sentiment import sentiment_bp
@@ -39,8 +54,10 @@ def create_app():
     # ── Global error handler ───────────────────────────────
     @app.errorhandler(Exception)
     def handle_error(error):
-        app.logger.error(f"Unhandled error: {error}")
-        return jsonify({"error": str(error)}), 500
+        if isinstance(error, HTTPException):
+            return jsonify({"error": error.description}), error.code
+        app.logger.exception("Unhandled error")
+        return jsonify({"error": "Internal Server Error"}), 500
 
     return app
 

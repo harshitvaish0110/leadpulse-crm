@@ -44,7 +44,7 @@ services:
     container_name: leadpulse_ml
     restart: unless-stopped
     ports:
-      - "5001:5001"
+      - "127.0.0.1:5001:5001"   # host access for local debugging only; the API reaches it on the compose network
     env_file: .env
     environment:
       DATABASE_URL: postgresql://leadpulse:leadpulse_secret@postgres:5432/leadpulse_db
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
     volumes:
       - ./ml-service:/app
-    command: python app.py
+    command: gunicorn "app:create_app()" --bind 0.0.0.0:5001 --workers 1 --threads 4 --timeout 120
 
   client:
     build:
