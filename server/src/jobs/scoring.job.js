@@ -14,11 +14,11 @@
 'use strict';
 
 const cron   = require('node-cron');
-const axios  = require('axios');
+const { ml } = require('../lib/mlClient');
+const { emitScoped } = require('../lib/realtime');
 const { prisma } = require('../lib/prisma');
 const { calculateAndSaveLeadScore } = require('../services/scoring.service');
 
-const ML_URL     = process.env.ML_SERVICE_URL || 'http://localhost:5001';
 const CRON_EXPR  = process.env.SCORING_CRON   || '0 2 * * *';
 const TZ         = process.env.TZ             || 'Asia/Kolkata';
 const BATCH_SIZE = 20; // Process contacts in batches to avoid overwhelming ML service
@@ -45,8 +45,8 @@ async function scoreContact(contact, now) {
       totalVal,
       openDeal ? 1 : 0,
     ];
-    const { data: churnData } = await axios.post(
-      `${ML_URL}/predict/churn`,
+    const { data: churnData } = await ml.post(
+      '/predict/churn',
       { features: churnFeatures },
       { timeout: 8_000 }
     );
@@ -58,9 +58,8 @@ async function scoreContact(contact, now) {
     });
 
     // Emit real-time alert for high-risk contacts
-    const io = global.io;
-    if (newChurnRisk > 0.7 && io && contact.ownerId) {
-      io.to(contact.ownerId).emit('contact:churn_alert', {
+    if (newChurnRisk > 0.7) {
+      emitScoped([contact.ownerId], 'contact:churn_alert', {
         contactId: contact.id,
         name:      `${contact.firstName} ${contact.lastName}`,
         churnRisk: newChurnRisk,
@@ -82,8 +81,8 @@ async function scoreContact(contact, now) {
         last30,
         100, // default company size
       ];
-      const { data: winData } = await axios.post(
-        `${ML_URL}/predict/win_prob`,
+      const { data: winData } = await ml.post(
+        '/predict/win_prob',
         { features: dealFeatures },
         { timeout: 8_000 }
       );
@@ -94,14 +93,10 @@ async function scoreContact(contact, now) {
           data:  { winProbability: Math.round(winData.probability * 100) },
         });
 
-        // Notify deal owner of stage update
-        const io = global.io;
-        if (io && openDeal.ownerId) {
-          io.to(openDeal.ownerId).emit('deal:score_updated', {
-            dealId:      openDeal.id,
-            winProb:     winData.probability,
-          });
-        }
+        emitScoped([openDeal.ownerId, contact.ownerId], 'deal:score_updated', {
+          dealId:         openDeal.id,
+          winProbability: winData.probability,
+        });
       }
     } catch (e) {
       console.warn(`[Scoring] Win prob skipped for deal ${openDeal.id}:`, e.message);

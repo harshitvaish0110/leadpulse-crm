@@ -10,11 +10,11 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 
 const http    = require('http');
-const { Server: SocketIOServer } = require('socket.io');
 
 const { createApp }   = require('./src/app');
 const { prisma }      = require('./src/lib/prisma');
 const { validateEnv } = require('./src/lib/env');
+const { attachSocket } = require('./src/lib/realtime');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
@@ -39,35 +39,8 @@ async function bootstrap() {
   const app    = createApp();
   const server = http.createServer(app);
 
-  // ── Socket.IO setup ─────────────────────────────────────────────────────────
-  const io = new SocketIOServer(server, {
-    cors: {
-      origin: process.env.CLIENT_URL || 'http://localhost:5173',
-      methods: ['GET', 'POST'],
-      credentials: true,
-    },
-    // Use websockets with polling fallback
-    transports: ['websocket', 'polling'],
-  });
-
-  // Attach io to app and globally so jobs can emit events
-  app.set('io', io);
-  global.io = io;
-
-  io.on('connection', (socket) => {
-    const clientId = socket.handshake.query?.userId ?? socket.id;
-    console.log(`[Socket] connected  → ${clientId} (${socket.id})`);
-
-    // Each user joins a private room keyed by their userId
-    // so we can target push updates to specific users
-    socket.on('join', (userId) => {
-      if (userId) socket.join(`user:${userId}`);
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log(`[Socket] disconnected → ${clientId} (${reason})`);
-    });
-  });
+  // ── Socket.IO (JWT handshake, server-side rooms) ─────────────────────────────
+  attachSocket(server);
 
   // ── Start listening ─────────────────────────────────────────────────────────
   server.listen(PORT, () => {
