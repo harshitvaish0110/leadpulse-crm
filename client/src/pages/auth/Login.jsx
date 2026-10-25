@@ -41,7 +41,7 @@ export default function Login() {
           <div className="inline-flex items-center justify-center w-12 h-12 bg-indigo-600 rounded-xl mb-4">
             <Sparkles size={24} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Leadpulse</h1>
+          <h1 className="text-2xl font-bold text-gray-900">LeadPulse</h1>
           <p className="text-gray-500 text-sm mt-1">Sign in to your account</p>
         </div>
 

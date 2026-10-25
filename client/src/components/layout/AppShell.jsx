@@ -1,6 +1,8 @@
+import { Suspense, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
+import ErrorBoundary from '../ErrorBoundary';
 import { useSocket } from '../../hooks/useSocket';
 
 const PAGE_TITLES = {
@@ -12,20 +14,20 @@ const PAGE_TITLES = {
   '/tasks':                 'Tasks',
   '/analytics':             'Analytics',
   '/ai-assistant':          'AI Assistant',
-  '/settings/general':      'General Settings',
-  '/settings/users':        'Team & Users',
-  '/settings/integrations': 'Integrations',
+  '/settings':              'Settings',
 };
 
-export default function AppShell() {
+export default function AppShell({ fallback = null }) {
   const location = useLocation();
 
-  // Initialize persistent Socket.IO connection for this session
+  // One authenticated Socket.IO connection for the signed-in user.
   useSocket();
 
-  const title = Object.entries(PAGE_TITLES).find(([path]) =>
-    location.pathname.startsWith(path)
-  )?.[1] || 'LeadPulse';
+  const title = Object.entries(PAGE_TITLES).find(([path]) => location.pathname.startsWith(path))?.[1] || 'LeadPulse';
+
+  useEffect(() => {
+    document.title = title === 'LeadPulse' ? 'LeadPulse' : `${title} · LeadPulse`;
+  }, [title]);
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
@@ -34,7 +36,12 @@ export default function AppShell() {
         <TopBar title={title} />
         <main className="flex-1 overflow-y-auto">
           <div className="p-6">
-            <Outlet />
+            {/* Keyed by path: navigating away from a crashed page clears the error. */}
+            <ErrorBoundary key={location.pathname}>
+              <Suspense fallback={fallback}>
+                <Outlet />
+              </Suspense>
+            </ErrorBoundary>
           </div>
         </main>
       </div>
