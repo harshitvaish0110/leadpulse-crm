@@ -1,9 +1,10 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Building2, TrendingUp,
   Activity, CheckSquare, BarChart2, Sparkles, Settings
 } from 'lucide-react';
 import { useUIStore } from '../../store/uiStore';
+import { useAuthStore } from '../../store/authStore';
 
 const NAV_ITEMS = [
   { label: 'Dashboard',     href: '/dashboard',        icon: LayoutDashboard },
@@ -14,11 +15,14 @@ const NAV_ITEMS = [
   { label: 'Tasks',         href: '/tasks',            icon: CheckSquare },
   { label: 'Analytics',     href: '/analytics',        icon: BarChart2 },
   { label: 'AI Assistant',  href: '/ai-assistant',     icon: Sparkles, highlight: true },
-  { label: 'Settings',      href: '/settings/general', icon: Settings },
 ];
 
 export default function Sidebar() {
   const { sidebarOpen, toggleSidebar } = useUIStore();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'ADMIN');
+  const { pathname } = useLocation();
+  // Admins land on workspace settings; everyone else on their profile.
+  const items = [...NAV_ITEMS, { label: 'Settings', href: isAdmin ? '/settings/general' : '/settings/profile', match: '/settings', icon: Settings }];
 
   return (
     <>
@@ -36,18 +40,19 @@ export default function Sidebar() {
           <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
             <Sparkles size={16} className="text-white" />
           </div>
-          <span className="text-white font-bold text-lg tracking-tight">Leadpulse</span>
+          <span className="text-white font-bold text-lg tracking-tight">LeadPulse</span>
         </div>
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map(({ label, href, icon: Icon, highlight }) => (
+          {items.map(({ label, href, match, icon: Icon, highlight }) => (
             <NavLink
-              key={href}
+              key={label}
               to={href}
+              onClick={() => { if (sidebarOpen && window.innerWidth < 1024) toggleSidebar(); }}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150
-                ${isActive
+                ${isActive || (match && pathname.startsWith(match))
                   ? 'bg-indigo-600 text-white'
                   : highlight
                     ? 'text-indigo-400 hover:bg-gray-800 hover:text-indigo-300'
@@ -65,7 +70,7 @@ export default function Sidebar() {
         <div className="px-3 pb-4 border-t border-gray-800 pt-4">
           <div className="flex items-center gap-2 px-3 py-2 text-gray-400 text-xs">
             <div className="w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center text-white text-xs font-bold">L</div>
-            <span>Leadpulse v1.0</span>
+            <span>LeadPulse v1.0</span>
           </div>
         </div>
       </aside>

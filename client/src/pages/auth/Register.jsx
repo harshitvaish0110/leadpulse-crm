@@ -24,7 +24,7 @@ export default function Register() {
       const { firstName, lastName, email, password } = form;
       const { data } = await authApi.post('/api/auth/register', { firstName, lastName, email, password });
       setSession(data.accessToken, data.user);
-      toast.success(`Welcome to Leadpulse, ${data.user.firstName}!`);
+      toast.success(`Welcome to LeadPulse, ${data.user.firstName}!`);
       navigate('/dashboard', { replace: true });
     } catch (err) {
       const res = err.response?.data;
@@ -42,7 +42,7 @@ export default function Register() {
             <Sparkles size={24} className="text-white" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Create an account</h1>
-          <p className="text-gray-500 text-sm mt-1">Join Leadpulse today</p>
+          <p className="text-gray-500 text-sm mt-1">Join LeadPulse today</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
