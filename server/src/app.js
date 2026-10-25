@@ -22,6 +22,7 @@ const usersRoutes      = require('./routes/users.routes');
 const settingsRoutes   = require('./routes/settings.routes');
 const emailRoutes      = require('./routes/emails.routes');
 const attachmentRoutes = require('./routes/attachments.routes');
+const notificationRoutes = require('./routes/notifications.routes');
 const storage          = require('./lib/storage');
 
 const { ApiError, errorHandler, notFoundHandler } = require('./middleware/error.middleware');
@@ -82,6 +83,7 @@ function createApp() {
   app.use('/api/settings',   settingsRoutes);
   app.use('/api/emails',     emailRoutes);
   app.use('/api/attachments', attachmentRoutes);
+  app.use('/api/notifications', notificationRoutes);
 
   // Signed, short-lived download links for private files (no auth header: links open in the browser).
   app.get('/api/files/*key', (req, res) => {
