@@ -1,97 +1,65 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowLeft, Mail, Phone, Building2, Calendar, TrendingUp,
-  Edit2, Trash2, Plus, PhoneCall, MessageSquare, FileText, Wand2
-} from 'lucide-react';
+import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { ArrowLeft, Mail, Phone, Building2, Edit2, Trash2, Plus, TrendingUp } from 'lucide-react';
+import api from '../../api/axiosInstance';
 import { getContact, updateContact, deleteContact } from '../../api/contacts';
-import { getActivities, createActivity } from '../../api/activities';
-import { getTasks } from '../../api/tasks';
+import { getActivities } from '../../api/activities';
+import { getDeals } from '../../api/deals';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import Avatar from '../../components/ui/Avatar';
-import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import Skeleton from '../../components/ui/Skeleton';
+import SlideOver from '../../components/ui/SlideOver';
+import EmptyState from '../../components/ui/EmptyState';
+import ErrorBoundary from '../../components/ErrorBoundary';
 import NextActionCard from '../../components/ai/NextActionCard';
-import EmailComposer from '../../components/ai/EmailComposer';
-import { CONTACT_STATUSES, LOGGABLE_ACTIVITY_TYPES } from '../../constants/crm';
-import { formatDate, formatPercent, humanize } from '../../lib/format';
+import ActivityTimeline from '../../components/activities/ActivityTimeline';
+import LogActivityModal from '../../components/activities/LogActivityModal';
+import ContactEmails from '../../components/contacts/ContactEmails';
+import ContactTasks from '../../components/contacts/ContactTasks';
+import ContactInsights from '../../components/contacts/ContactInsights';
+import { ScoreBadge, ChurnBar, WinProbabilityBar } from '../../components/crm/Indicators';
+import { CONTACT_STATUSES } from '../../constants/crm';
+import { formatCurrency, formatDate, humanize } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
+import { useDirectory } from '../../hooks/queries/lookups';
+import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 
-const LEAD_SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue' };
-const EDITABLE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'title', 'status'];
-const ACTIVITY_ICONS = { CALL: PhoneCall, EMAIL: Mail, MEETING: Calendar, NOTE: FileText, TRANSCRIPT: MessageSquare };
-
-function InfoRow({ icon: Icon, label, value }) {
-  if (!value) return null;
-  return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-gray-50 last:border-0">
-      <Icon size={15} className="text-gray-400 mt-0.5 flex-shrink-0" />
-      <div>
-        <p className="text-xs text-gray-400">{label}</p>
-        <p className="text-sm text-gray-800 font-medium">{value}</p>
-      </div>
-    </div>
-  );
-}
-
-function AddActivityModal({ contactId, onClose }) {
-  const qc = useQueryClient();
-  const [form, setForm] = useState({ type: 'CALL', subject: '', notes: '' });
-  const { mutate, isPending } = useMutation({
-    mutationFn: createActivity,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.activities.all });
-      toast.success('Activity logged');
-      onClose();
-    },
-    onError: (err) => toast.error(err.response?.data?.error || 'Failed to log activity'),
-  });
-  return (
-    <form onSubmit={e => { e.preventDefault(); mutate({ ...form, contactId }); }} className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-        <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}>
-          {LOGGABLE_ACTIVITY_TYPES.map(t => <option key={t} value={t}>{humanize(t)}</option>)}
-        </select>
-      </div>
-      <Input label="Subject" value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-        <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-          rows={4} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
-      </div>
-      <div className="flex gap-3">
-        <Button type="button" variant="secondary" onClick={onClose} className="flex-1">Cancel</Button>
-        <Button type="submit" loading={isPending} className="flex-1">Log Activity</Button>
-      </div>
-    </form>
-  );
-}
+const TABS = [
+  ['overview', 'Overview'], ['activities', 'Activities'], ['deals', 'Deals'],
+  ['emails', 'Emails'], ['tasks', 'Tasks'], ['insights', 'AI Insights'],
+];
+const EDITABLE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'title', 'status', 'linkedinUrl'];
+const field = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
+const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 function EditContactForm({ contact, onCancel, onSave, saving }) {
-  const [form, setForm] = useState(() => Object.fromEntries(EDITABLE_FIELDS.map(f => [f, contact[f] ?? ''])));
-  const set = (field) => (e) => setForm(p => ({ ...p, [field]: e.target.value }));
+  const [form, setForm] = useState(() => ({
+    ...Object.fromEntries(EDITABLE_FIELDS.map(f => [f, contact[f] ?? ''])),
+    tags: (contact.tags || []).join(', '),
+  }));
+  const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
   return (
     <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <Input label="First name" required value={form.firstName} onChange={set('firstName')} />
         <Input label="Last name" required value={form.lastName} onChange={set('lastName')} />
-        <Input label="Email" type="email" required value={form.email} onChange={set('email')} />
-        <Input label="Phone" type="tel" value={form.phone} onChange={set('phone')} />
-        <Input label="Title" value={form.title} onChange={set('title')} />
-        <div>
-          <label htmlFor="contact-status" className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-          <select id="contact-status" value={form.status} onChange={set('status')}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-            {CONTACT_STATUSES.map(st => <option key={st} value={st}>{humanize(st)}</option>)}
-          </select>
-        </div>
       </div>
+      <Input label="Email" type="email" required value={form.email} onChange={set('email')} />
+      <Input label="Phone" type="tel" value={form.phone} onChange={set('phone')} />
+      <Input label="Title" value={form.title} onChange={set('title')} />
+      <Input label="LinkedIn URL" type="url" value={form.linkedinUrl} onChange={set('linkedinUrl')} />
+      <div>
+        <label htmlFor="contact-status" className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+        <select id="contact-status" value={form.status} onChange={set('status')} className={field}>
+          {CONTACT_STATUSES.map(st => <option key={st} value={st}>{humanize(st)}</option>)}
+        </select>
+      </div>
+      <Input label="Tags" value={form.tags} onChange={set('tags')} placeholder="Comma separated" />
       <div className="flex gap-3">
         <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">Cancel</Button>
         <Button type="submit" loading={saving} className="flex-1">Save Changes</Button>
@@ -100,239 +68,242 @@ function EditContactForm({ contact, onCancel, onSave, saving }) {
   );
 }
 
+function SentimentSparkline({ contactId }) {
+  const { data = [] } = useQuery({
+    queryKey: [...qk.contacts.detail(contactId), 'snapshots', 'sentimentScore', 730],
+    queryFn: () => api.get(`/api/contacts/${contactId}/snapshots`, { params: { metric: 'sentimentScore', days: 730 } }).then(r => r.data.points.slice(-30)),
+  });
+  if (data.length < 2) return null;
+  return (
+    <div className="h-10 w-28" aria-label="Sentiment trend" role="img">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data}><Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} dot={false} /></LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ProfilePanel({ contact, onEdit, onDelete }) {
+  const qc = useQueryClient();
+  const isPrivileged = useAuthStore((s) => ['ADMIN', 'MANAGER'].includes(s.user?.role));
+  const { data: directory = [] } = useDirectory();
+  const reassign = useMutation({
+    mutationFn: (ownerId) => updateContact(contact.id, { ownerId }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.contacts.all }); toast.success('Owner updated'); },
+    onError: (err) => toast.error(apiError(err, 'Could not change the owner')),
+  });
+
+  return (
+    <aside className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+      <div className="flex items-start gap-4">
+        <Avatar firstName={contact.firstName} lastName={contact.lastName} size="lg" />
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-gray-900">{contact.firstName} {contact.lastName}</h1>
+          <p className="text-sm text-gray-500">
+            {contact.title}
+            {contact.company && <> {contact.title ? 'at ' : ''}<Link to={`/companies/${contact.company.id}`} className="text-indigo-600 hover:text-indigo-700">{contact.company.name}</Link></>}
+          </p>
+          <div className="flex gap-2 mt-2 flex-wrap">
+            <Badge variant="gray">{humanize(contact.status)}</Badge>
+            <ScoreBadge label={contact.leadScoreLabel} score={contact.leadScore} explanation={contact.leadScoreExplanation} />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2 text-sm">
+        <a href={`mailto:${contact.email}`} className="flex items-center gap-2 text-gray-700 hover:text-indigo-600"><Mail size={14} className="text-gray-400" /> {contact.email}</a>
+        {contact.phone && <a href={`tel:${contact.phone}`} className="flex items-center gap-2 text-gray-700 hover:text-indigo-600"><Phone size={14} className="text-gray-400" /> {contact.phone}</a>}
+        {contact.company && <p className="flex items-center gap-2 text-gray-700"><Building2 size={14} className="text-gray-400" /> {contact.company.industry || 'Company'}</p>}
+      </div>
+
+      {contact.leadScoreExplanation && <p className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">{contact.leadScoreExplanation}</p>}
+
+      <div className="space-y-3">
+        <div>
+          <p className="text-xs text-gray-400 mb-1">Churn risk</p>
+          <ChurnBar value={contact.churnRisk ?? 0} />
+        </div>
+        <div className="flex items-end justify-between">
+          <div>
+            <p className="text-xs text-gray-400">Sentiment</p>
+            <p className="text-sm font-medium text-gray-800">{(contact.sentimentScore ?? 0.5).toFixed(2)} / 1.00</p>
+          </div>
+          <SentimentSparkline contactId={contact.id} />
+        </div>
+      </div>
+
+      <div>
+        <label htmlFor="contact-owner-select" className="block text-xs text-gray-400 mb-1">Owner</label>
+        {isPrivileged ? (
+          <select id="contact-owner-select" className={field} value={contact.ownerId ?? ''} disabled={reassign.isPending}
+            onChange={e => e.target.value && reassign.mutate(e.target.value)}>
+            {!contact.ownerId && <option value="">Unassigned</option>}
+            {directory.map(u => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
+          </select>
+        ) : (
+          <p className="text-sm text-gray-800">{contact.owner ? `${contact.owner.firstName} ${contact.owner.lastName}` : 'Unassigned'}</p>
+        )}
+      </div>
+
+      {contact.tags?.length > 0 && (
+        <div className="flex gap-1.5 flex-wrap">{contact.tags.map(t => <Badge key={t} variant="indigo">{t}</Badge>)}</div>
+      )}
+
+      <div className="flex gap-2 pt-2 border-t border-gray-100">
+        <Button variant="secondary" size="sm" onClick={onEdit} className="flex-1"><Edit2 size={14} className="mr-1.5" /> Edit</Button>
+        <Button variant="danger" size="sm" onClick={onDelete} aria-label="Delete contact"><Trash2 size={14} /></Button>
+      </div>
+      <p className="text-xs text-gray-400">Added {formatDate(contact.createdAt)}</p>
+    </aside>
+  );
+}
+
+function DealCards({ deals }) {
+  if (!deals.length) return <EmptyState icon={TrendingUp} title="No deals" description="Deals for this contact will show here." />;
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {deals.map(d => (
+        <Link key={d.id} to={`/deals/${d.id}`} className="block bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <p className="text-sm font-semibold text-gray-900">{d.title}</p>
+            <Badge variant="gray">{d.pipelineStage?.label || humanize(d.stage)}</Badge>
+          </div>
+          <p className="text-lg font-bold text-indigo-600 mb-2">{formatCurrency(d.value)}</p>
+          <WinProbabilityBar value={d.winProbability} />
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export default function ContactDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [showActivity, setShowActivity] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.some(([key]) => key === params.get('tab')) ? params.get('tab') : 'overview';
+  const setTab = (key) => setParams(key === 'overview' ? {} : { tab: key }, { replace: true });
   const [editing, setEditing] = useState(false);
-  const [activeTab, setActiveTab] = useState('timeline'); // 'timeline' | 'ai'
+  const [logging, setLogging] = useState(false);
 
-  const activityParams = { contactId: id, limit: 20 };
-  const taskParams = { contactId: id, completed: 'false' };
   const { data: contactData, isLoading } = useQuery({
     queryKey: qk.contacts.detail(id),
     queryFn: () => getContact(id).then(r => r.data),
   });
+  const activityParams = { contactId: id, limit: tab === 'overview' ? 5 : 50 };
   const { data: activitiesData } = useQuery({
     queryKey: qk.activities.list(activityParams),
     queryFn: () => getActivities(activityParams).then(r => r.data),
+    enabled: tab === 'overview' || tab === 'activities',
   });
-  const { data: tasksData } = useQuery({
-    queryKey: qk.tasks.list(taskParams),
-    queryFn: () => getTasks(taskParams).then(r => r.data),
+  const dealParams = { view: 'list', contactId: id, limit: 100 };
+  const { data: dealsData } = useQuery({
+    queryKey: qk.deals.list(dealParams),
+    queryFn: () => getDeals(dealParams).then(r => r.data.deals),
+    enabled: tab === 'deals',
   });
 
   const updateMutation = useMutation({
     mutationFn: (data) => updateContact(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.contacts.all });
-      toast.success('Contact updated'); setEditing(false);
-    },
-    onError: (err) => toast.error(err.response?.data?.details?.[0]?.msg || err.response?.data?.error || 'Update failed'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.contacts.all }); toast.success('Contact updated'); setEditing(false); },
+    onError: (err) => toast.error(apiError(err, 'Update failed')),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteContact(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.contacts.all });
-      toast.success('Contact deleted');
-      navigate('/contacts');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.contacts.all }); toast.success('Contact deleted'); navigate('/contacts'); },
     onError: () => toast.error('Delete failed'),
   });
 
   const contact = contactData?.contact;
-
   if (isLoading) {
     return (
-      <div className="max-w-6xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-64 w-full" />
+      <div className="max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-[35fr_65fr] gap-6">
+        <Skeleton className="h-96 w-full rounded-2xl" />
+        <Skeleton className="h-96 w-full rounded-2xl" />
       </div>
     );
   }
-  if (!contact) return <div className="text-center py-20 text-gray-400">Contact not found</div>;
+  if (!contact) return <EmptyState title="Contact not found" description="It may have been deleted, or it belongs to someone else's book." actionLabel="Back to contacts" onAction={() => navigate('/contacts')} />;
 
-  const risk = contact.churnRisk ?? 0;
-  const riskColor = risk > 0.6 ? 'red' : risk > 0.3 ? 'amber' : 'green';
+  const contactRef = { id: contact.id, name: `${contact.firstName} ${contact.lastName}` };
+  const activities = activitiesData?.activities || [];
+
+  // "Do it" on the AI recommendation opens the matching action.
+  const doAction = (action) => {
+    const channel = action?.channel || action?.type;
+    if (channel === 'EMAIL') setTab('emails');
+    else if (channel === 'TASK') setTab('tasks');
+    else setLogging(true);
+  };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      {/* Back nav */}
+    <div className="max-w-7xl mx-auto space-y-4">
       <button onClick={() => navigate('/contacts')} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors">
         <ArrowLeft size={16} /> Back to Contacts
       </button>
 
-      {/* Profile Header */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-        <div className="flex items-start justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-4">
-            <Avatar firstName={contact.firstName} lastName={contact.lastName} size="lg" />
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">{contact.firstName} {contact.lastName}</h1>
-              <p className="text-sm text-gray-500">{contact.title}{contact.company ? ` at ${contact.company.name}` : ''}</p>
-              <div className="flex items-center gap-2 mt-2">
-                {contact.leadScoreLabel && (
-                  <Badge variant={LEAD_SCORE_VARIANT[contact.leadScoreLabel]}>
-                    {contact.leadScoreLabel} · {contact.leadScore}
-                  </Badge>
-                )}
-                <Badge variant={riskColor}>{formatPercent(risk)} churn risk</Badge>
-                <Badge variant="gray">{humanize(contact.status)}</Badge>
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
-              <Edit2 size={14} className="mr-1.5" /> Edit
-            </Button>
-            <Button variant="danger" size="sm" onClick={() => { if (confirm('Delete this contact?')) deleteMutation.mutate(); }}>
-              <Trash2 size={14} className="mr-1.5" /> Delete
-            </Button>
-          </div>
-        </div>
-      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-[35fr_65fr] gap-6 items-start">
+        <ProfilePanel contact={contact} onEdit={() => setEditing(true)}
+          onDelete={() => { if (confirm('Delete this contact? Their deals, activities and emails are deleted too.')) deleteMutation.mutate(); }} />
 
-      {/* Main grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-        {/* Left: Info Panel */}
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">Contact Info</h2>
-            <InfoRow icon={Mail} label="Email" value={contact.email} />
-            <InfoRow icon={Phone} label="Phone" value={contact.phone} />
-            <InfoRow icon={Building2} label="Company" value={contact.company?.name} />
-            <InfoRow icon={Calendar} label="Member since" value={formatDate(contact.createdAt)} />
-            {contact.sentimentScore != null && (
-              <InfoRow icon={TrendingUp} label="Avg Sentiment" value={`${contact.sentimentScore.toFixed(2)} / 1.0`} />
-            )}
-          </div>
-
-          {/* AI: Next Best Action */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">AI Recommendation</h2>
-            <NextActionCard
-              contactId={id}
-              onActionTaken={() => setShowActivity(true)}
-            />
-          </div>
-
-          {/* Open Tasks */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-gray-700">Open Tasks</h2>
-              <span className="text-xs text-gray-400">{tasksData?.meta?.total ?? 0}</span>
-            </div>
-            {(tasksData?.tasks || []).length === 0 ? (
-              <p className="text-xs text-gray-400 py-2">No open tasks</p>
-            ) : (
-              <div className="space-y-2">
-                {(tasksData?.tasks || []).slice(0, 5).map(t => (
-                  <div key={t.id} className="flex items-start gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 ${t.priority === 'HIGH' ? 'bg-red-500' : t.priority === 'MEDIUM' ? 'bg-amber-500' : 'bg-gray-300'}`} />
-                    <div>
-                      <p className="text-sm text-gray-700">{t.title}</p>
-                      {t.dueDate && <p className="text-xs text-gray-400">{formatDate(t.dueDate)}</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right: Activity Timeline + AI Composer */}
-        <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm">
-          {/* Tab bar */}
-          <div className="flex border-b border-gray-100 px-6 pt-4">
-            {[['timeline', 'Timeline'], ['ai', 'AI Tools']].map(([key, label]) => (
-              <button key={key} onClick={() => setActiveTab(key)}
-                className={`pb-3 mr-6 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === key ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}>
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-sm min-w-0">
+          <div role="tablist" aria-label="Contact sections" className="flex border-b border-gray-100 px-4 pt-3 overflow-x-auto">
+            {TABS.map(([key, label]) => (
+              <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
+                className={`pb-3 px-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+                  tab === key ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 {label}
               </button>
             ))}
           </div>
 
-          <div className="p-6">
-            {/* Timeline Tab */}
-            {activeTab === 'timeline' && (
-              <>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-sm font-semibold text-gray-700">Activity Timeline</h2>
-                  <Button size="sm" onClick={() => setShowActivity(true)}>
-                    <Plus size={14} className="mr-1.5" /> Log Activity
-                  </Button>
-                </div>
-                {(activitiesData?.activities || []).length === 0 ? (
-                  <p className="text-sm text-gray-400 py-8 text-center">No activities yet — log a call, email, or meeting</p>
-                ) : (
-                  <div className="relative space-y-0">
-                    <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100" />
-                    {(activitiesData?.activities || []).map(a => {
-                      const Icon = ACTIVITY_ICONS[a.type] || PhoneCall;
-                      const sentimentColor = a.sentiment === 'POSITIVE' ? 'text-green-600' : a.sentiment === 'NEGATIVE' ? 'text-red-500' : 'text-gray-400';
-                      return (
-                        <div key={a.id} className="flex gap-4 pb-6 relative">
-                          <div className="w-8 h-8 bg-white border-2 border-gray-100 rounded-full flex items-center justify-center flex-shrink-0 z-10">
-                            <Icon size={14} className="text-indigo-500" />
-                          </div>
-                          <div className="flex-1 pt-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-medium text-gray-800">{a.subject || a.type}</span>
-                              {a.sentiment && (
-                                <span className={`text-xs ${sentimentColor}`}>{a.sentiment.toLowerCase()}</span>
-                              )}
-                              <span className="text-xs text-gray-400 ml-auto">
-                                {formatDate(a.occurredAt, { year: undefined })}
-                              </span>
-                            </div>
-                            {a.notes && <p className="text-sm text-gray-500">{a.notes}</p>}
-                            {a.durationMinutes && (
-                              <p className="text-xs text-gray-400 mt-0.5">{a.durationMinutes} min</p>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+          <div className="p-6" role="tabpanel">
+            <ErrorBoundary key={tab} compact>
+              {tab === 'overview' && (
+                <div className="space-y-6">
+                  <NextActionCard contactId={id} initialAction={contact.nextBestAction} onActionTaken={doAction} />
+                  {contact.deals?.length > 0 && (
+                    <div>
+                      <h2 className="text-sm font-semibold text-gray-700 mb-3">Open deals</h2>
+                      <DealCards deals={contact.deals} />
+                    </div>
+                  )}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="text-sm font-semibold text-gray-700">Recent activity</h2>
+                      <button onClick={() => setTab('activities')} className="text-xs text-indigo-600 hover:text-indigo-700">See all</button>
+                    </div>
+                    {activities.length ? <ActivityTimeline activities={activities} /> : <p className="text-sm text-gray-400">No activity yet.</p>}
                   </div>
-                )}
-              </>
-            )}
+                </div>
+              )}
 
-            {/* AI Tools Tab */}
-            {activeTab === 'ai' && (
-              <div className="space-y-6">
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <Wand2 size={15} className="text-indigo-500" />
-                    <h2 className="text-sm font-semibold text-gray-700">AI Email Composer</h2>
+              {tab === 'activities' && (
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-sm font-semibold text-gray-700">Activity timeline</h2>
+                    <Button size="sm" onClick={() => setLogging(true)}><Plus size={14} className="mr-1.5" /> Log Activity</Button>
                   </div>
-                  <EmailComposer contactId={id} />
-                </div>
-              </div>
-            )}
+                  {activities.length ? <ActivityTimeline activities={activities} />
+                    : <EmptyState title="No activities yet" description="Log a call, email, meeting or note." />}
+                </>
+              )}
+
+              {tab === 'deals' && <DealCards deals={dealsData || []} />}
+              {tab === 'emails' && <ContactEmails contactId={id} contactName={contactRef.name} />}
+              {tab === 'tasks' && <ContactTasks contactId={id} />}
+              {tab === 'insights' && <ContactInsights contactId={id} days={365} />}
+            </ErrorBoundary>
           </div>
-        </div>
+        </section>
       </div>
 
-      {/* Log Activity Modal */}
-      <Modal isOpen={showActivity} onClose={() => setShowActivity(false)} title="Log Activity">
-        <AddActivityModal contactId={id} onClose={() => setShowActivity(false)} />
-      </Modal>
+      <LogActivityModal isOpen={logging} onClose={() => setLogging(false)} contact={contactRef} />
 
-      {/* Edit Modal */}
-      <Modal isOpen={editing} onClose={() => setEditing(false)} title="Edit Contact" size="lg">
-        <EditContactForm
-          key={`${contact.id}-${contact.updatedAt}`}
-          contact={contact}
-          saving={updateMutation.isPending}
-          onCancel={() => setEditing(false)}
-          onSave={(data) => updateMutation.mutate(data)}
-        />
-      </Modal>
+      <SlideOver isOpen={editing} onClose={() => setEditing(false)} title="Edit Contact">
+        <EditContactForm key={`${contact.id}-${contact.updatedAt}`} contact={contact}
+          saving={updateMutation.isPending} onCancel={() => setEditing(false)} onSave={(data) => updateMutation.mutate(data)} />
+      </SlideOver>
     </div>
   );
 }
