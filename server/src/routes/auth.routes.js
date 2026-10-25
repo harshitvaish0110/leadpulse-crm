@@ -28,7 +28,9 @@ const MIN = 60_000;
 // Only failed sign-ins count, per IP and email address.
 const loginLimit    = limiter({ windowMs: 15 * MIN, limit: 10, keyGenerator: ipAndEmail, skipSuccessfulRequests: true });
 const registerLimit = limiter({ windowMs: 60 * MIN, limit: 5 });
-const refreshLimit  = limiter({ windowMs: 15 * MIN, limit: 60 });
+// Every page load restores the session, so successful refreshes are not counted;
+// only failures (bad or expired cookies, unknown invite tokens) are.
+const refreshLimit  = limiter({ windowMs: 15 * MIN, limit: 60, skipSuccessfulRequests: true });
 
 // Keep dots and +tags: they are distinct mailboxes outside Gmail.
 const email = (field = 'email') => body(field)
