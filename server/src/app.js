@@ -21,6 +21,8 @@ const aiRoutes         = require('./routes/ai.routes');
 const usersRoutes      = require('./routes/users.routes');
 const settingsRoutes   = require('./routes/settings.routes');
 const emailRoutes      = require('./routes/emails.routes');
+const attachmentRoutes = require('./routes/attachments.routes');
+const storage          = require('./lib/storage');
 
 const { ApiError, errorHandler, notFoundHandler } = require('./middleware/error.middleware');
 const { allowedOrigins } = require('./lib/env');
@@ -79,6 +81,16 @@ function createApp() {
   app.use('/api/users',      usersRoutes);
   app.use('/api/settings',   settingsRoutes);
   app.use('/api/emails',     emailRoutes);
+  app.use('/api/attachments', attachmentRoutes);
+
+  // Signed, short-lived download links for private files (no auth header: links open in the browser).
+  app.get('/api/files/*key', (req, res) => {
+    const key = [].concat(req.params.key).join('/');
+    const file = storage.verify(key, req.query);
+    res.download(file, String(req.query.name || 'download'), { headers: { 'Cache-Control': 'private, no-store' } }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ success: false, error: 'File not found', code: 'NOT_FOUND' });
+    });
+  });
 
   app.use(notFoundHandler);
   app.use(errorHandler);
