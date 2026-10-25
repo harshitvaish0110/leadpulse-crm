@@ -54,7 +54,10 @@ test('core CRM flow as a sales rep', async ({ page, request }) => {
   await expect(page.getByText('Contact created')).toBeVisible();
 
   await page.getByPlaceholder('Search contacts...').fill(contact.email);
-  await page.getByText(`${contact.firstName} ${contact.lastName}`).first().click();
+  await expect(page).toHaveURL(/[?&]q=/); // search is debounced into the URL
+  const row = page.getByRole('row').filter({ hasText: contact.lastName });
+  await expect(row).toHaveCount(1);
+  await row.getByRole('button', { name: new RegExp(contact.lastName) }).first().click();
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
   api = { contactId: page.url().split('/').pop() };
 
@@ -86,6 +89,7 @@ test('core CRM flow as a sales rep', async ({ page, request }) => {
   await expect(target).toBeInViewport();
   const from = await handle.boundingBox();
   const to = await target.boundingBox();
+  const targetStageId = await target.getAttribute('data-stage-id');
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(from.x + from.width / 2 + 15, from.y + from.height / 2, { steps: 5 });
@@ -99,7 +103,7 @@ test('core CRM flow as a sales rep', async ({ page, request }) => {
   const stageSaved = page.waitForResponse((r) => r.url().includes(`/stage`) && r.request().method() === 'PATCH');
   await page.mouse.up();
   const stageRes = await stageSaved;
-  expect(stageRes.request().postDataJSON().pipelineStageId).toBe(await target.getAttribute('data-stage-id'));
+  expect(stageRes.request().postDataJSON().pipelineStageId).toBe(targetStageId);
   expect(stageRes.ok()).toBeTruthy();
 
   api.token = await apiLogin(request);
