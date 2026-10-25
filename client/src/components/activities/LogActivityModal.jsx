@@ -4,7 +4,7 @@ import Modal from '../ui/Modal';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
 import { createActivity } from '../../api/activities';
-import { getContacts } from '../../api/contacts';
+import ContactPicker from '../contacts/ContactPicker';
 import { getDeals } from '../../api/deals';
 import { LOGGABLE_ACTIVITY_TYPES } from '../../constants/crm';
 import { humanize } from '../../lib/format';
@@ -18,44 +18,6 @@ const toLocalInput = (date) => {
   const d = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return d.toISOString().slice(0, 16);
 };
-
-function ContactPicker({ value, onChange }) {
-  const [term, setTerm] = useState('');
-  const { data } = useQuery({
-    queryKey: qk.contacts.list({ search: term, limit: 8, picker: true }),
-    queryFn: () => getContacts({ search: term, limit: 8, sortBy: 'lastName', sortDir: 'asc' }).then((r) => r.data.contacts),
-    enabled: term.trim().length > 0,
-  });
-
-  if (value) {
-    return (
-      <div className="flex items-center justify-between border border-gray-300 rounded-lg px-3 py-2 text-sm">
-        <span>{value.name}</span>
-        <button type="button" onClick={() => onChange(null)} className="text-xs text-indigo-600 hover:text-indigo-700">Change</button>
-      </div>
-    );
-  }
-  return (
-    <div className="relative">
-      <input id="activity-contact" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Search by name or email…"
-        className={field} autoComplete="off" aria-autocomplete="list" aria-controls="activity-contact-results" />
-      {term.trim() && (
-        <ul id="activity-contact-results" role="listbox" className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
-          {(data || []).length === 0 ? (
-            <li className="px-3 py-2 text-sm text-gray-400">No matching contacts</li>
-          ) : data.map((c) => (
-            <li key={c.id} role="option" aria-selected="false">
-              <button type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50"
-                onClick={() => onChange({ id: c.id, name: `${c.firstName} ${c.lastName}` })}>
-                {c.firstName} {c.lastName} <span className="text-gray-400">· {c.email}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
 
 function LogActivityForm({ contact: fixedContact, dealId: fixedDealId, onClose }) {
   const qc = useQueryClient();
@@ -114,7 +76,7 @@ function LogActivityForm({ contact: fixedContact, dealId: fixedDealId, onClose }
       {!fixedContact && (
         <div>
           <label htmlFor="activity-contact" className="block text-sm font-medium text-gray-700 mb-1">Contact</label>
-          <ContactPicker value={contact} onChange={(c) => { setContact(c); setForm((p) => ({ ...p, dealId: '' })); }} />
+          <ContactPicker id="activity-contact" value={contact} onChange={(c) => { setContact(c); setForm((p) => ({ ...p, dealId: '' })); }} />
         </div>
       )}
 
