@@ -53,7 +53,13 @@ async function list(req, res, next) {
         where,
         skip,
         take:    limitNum,
-        orderBy: { [orderField]: sortDir === 'desc' ? 'desc' : 'asc' },
+        // Tasks without a due date sort last either way.
+        orderBy: [
+          orderField === 'dueDate'
+            ? { dueDate: { sort: sortDir === 'desc' ? 'desc' : 'asc', nulls: 'last' } }
+            : { [orderField]: sortDir === 'desc' ? 'desc' : 'asc' },
+          { id: 'asc' },
+        ],
         include: TASK_INCLUDE,
       }),
       prisma.task.count({ where }),
