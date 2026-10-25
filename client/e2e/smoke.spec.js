@@ -58,7 +58,8 @@ test('core CRM flow as a sales rep', async ({ page, request }) => {
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
   api = { contactId: page.url().split('/').pop() };
 
-  // Log an activity on it.
+  // Log an activity on it (from the contact's Activities tab).
+  await page.getByRole('tab', { name: 'Activities' }).click();
   await page.getByRole('button', { name: 'Log Activity' }).first().click();
   await page.getByLabel('Subject').fill('Smoke test call');
   await page.locator('form textarea').fill('Great call, they want a pilot.');
@@ -93,11 +94,12 @@ test('core CRM flow as a sales rep', async ({ page, request }) => {
     await page.mouse.up();
     throw new Error('The drag did not pick up the test deal');
   }
-  await page.mouse.move(to.x + to.width / 2, to.y + to.height - 12, { steps: 25 });
+  // Columns stretch to the tallest one, so aim near the top where it is on screen.
+  await page.mouse.move(to.x + to.width / 2, to.y + 40, { steps: 25 });
   const stageSaved = page.waitForResponse((r) => r.url().includes(`/stage`) && r.request().method() === 'PATCH');
   await page.mouse.up();
   const stageRes = await stageSaved;
-  expect(stageRes.request().postDataJSON()).toEqual({ stage: 'DEMO' });
+  expect(stageRes.request().postDataJSON().pipelineStageId).toBe(await target.getAttribute('data-stage-id'));
   expect(stageRes.ok()).toBeTruthy();
 
   api.token = await apiLogin(request);
