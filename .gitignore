@@ -45,3 +45,5 @@ server/prisma/migrations/**/migration_lock.toml
 
 # Project Instructions
 leadpulse_agent.md
+# Uploaded files (local storage driver)
+server/storage/
