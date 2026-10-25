@@ -9,6 +9,7 @@ router.use(authenticate);
 router.get('/',              ctrl.list);
 router.post('/',             ctrl.create);
 router.get('/:id',           ctrl.getOne);
+router.get('/:id/history',   ctrl.history);
 router.patch('/:id',         ctrl.update);
 router.patch('/:id/stage',   ctrl.updateStage);
 router.delete('/:id',        ctrl.remove);
