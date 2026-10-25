@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Send, Sparkles, PlusCircle, Bot, User, Loader2, ExternalLink } from 'lucide-react';
-import { API_BASE } from '../api/axiosInstance';
+import { streamSSE } from '../lib/sse';
 
 const NO_MESSAGES = [];
 
@@ -65,78 +65,65 @@ export default function AIAssistant() {
   const [streaming, setStreaming] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
-  const sourceRef = useRef(null);
+  const abortRef = useRef(null);
 
   const activeConv = conversations.find(c => c.id === activeConvId);
   const messages = activeConv?.messages ?? NO_MESSAGES;
 
-  const setMessages = (updater) => {
-    setConversations(prev => prev.map(c =>
-      c.id === activeConvId
-        ? { ...c, messages: typeof updater === 'function' ? updater(c.messages) : updater }
-        : c
-    ));
+  /** Updates one conversation's messages (the one a stream belongs to, even if the user switches tabs). */
+  const setMessagesFor = (convId, updater) => {
+    setConversations(prev => prev.map(c => (c.id === convId ? { ...c, messages: updater(c.messages) } : c)));
   };
+  /** Immutably patches the last (assistant) message. */
+  const patchLast = (convId, patch) => setMessagesFor(convId, (msgs) => {
+    if (!msgs.length) return msgs;
+    const last = msgs[msgs.length - 1];
+    return [...msgs.slice(0, -1), { ...last, ...patch(last) }];
+  });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = (question) => {
+  // Abort an in-flight answer when leaving the page.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const sendMessage = async (question) => {
     if (!question.trim() || streaming) return;
+    const convId = activeConvId;
     setInput('');
     setStreaming(true);
 
-    // Append user message
-    setMessages(prev => [...prev, { role: 'user', content: question }]);
-    // Placeholder for assistant
-    setMessages(prev => [...prev, { role: 'assistant', content: '', sources: [] }]);
+    setMessagesFor(convId, prev => [
+      ...prev,
+      { role: 'user', content: question },
+      { role: 'assistant', content: '', sources: [] },
+    ]);
 
-    // Update conversation label from first message
+    // Name the conversation after its first question.
     setConversations(prev => prev.map(c =>
-      c.id === activeConvId && c.label === 'New Chat'
+      c.id === convId && c.label === 'New Chat'
         ? { ...c, label: question.slice(0, 30) + (question.length > 30 ? '…' : '') }
         : c
     ));
 
-    const url = `${API_BASE}/api/ai/chat?question=${encodeURIComponent(question)}`;
-    const es = new EventSource(url, {
-      withCredentials: false,
-    });
-    sourceRef.current = es;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const fail = (message) => patchLast(convId, (last) => ({
+      content: last.content || message || 'Sorry, I had trouble reaching the AI service. Please try again.',
+    }));
 
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.done) {
-          setMessages(prev => {
-            const msgs = [...prev];
-            if (msgs.length > 0) msgs[msgs.length - 1].sources = data.sources || [];
-            return msgs;
-          });
-          es.close();
-          setStreaming(false);
-          return;
-        }
-        setMessages(prev => {
-          const msgs = [...prev];
-          if (msgs.length > 0) msgs[msgs.length - 1].content += (data.text || '');
-          return msgs;
-        });
-      } catch { /* ignore malformed SSE payload */ }
-    };
-
-    es.onerror = () => {
-      setMessages(prev => {
-        const msgs = [...prev];
-        if (msgs.length > 0 && !msgs[msgs.length - 1].content) {
-          msgs[msgs.length - 1].content = 'Sorry, I had trouble connecting to the AI service. Please try again.';
-        }
-        return msgs;
-      });
-      es.close();
+    try {
+      await streamSSE('/api/ai/chat', { question }, {
+        delta: ({ text }) => patchLast(convId, (last) => ({ content: last.content + text })),
+        sources: ({ sources }) => patchLast(convId, () => ({ sources: sources || [] })),
+        error: ({ message }) => fail(message),
+      }, { signal: controller.signal });
+    } catch (err) {
+      if (err.name !== 'AbortError') fail(err.message);
+    } finally {
       setStreaming(false);
-    };
+    }
   };
 
   const newChat = () => {

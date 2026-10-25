@@ -8,6 +8,9 @@ import Badge from '../components/ui/Badge';
 import SlideOver from '../components/ui/SlideOver';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
+import { TASK_PRIORITIES } from '../constants/crm';
+import { formatDate, humanize } from '../lib/format';
+import { qk } from '../hooks/queries/keys';
 import toast from 'react-hot-toast';
 
 const PRIORITY_VARIANT = { HIGH: 'red', MEDIUM: 'amber', LOW: 'gray' };
@@ -17,7 +20,7 @@ function AddTaskForm({ onClose }) {
   const [form, setForm] = useState({ title: '', description: '', priority: 'MEDIUM', dueDate: '' });
   const { mutate, isPending } = useMutation({
     mutationFn: createTask,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tasks'] }); toast.success('Task created'); onClose(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.tasks.all }); toast.success('Task created'); onClose(); },
     onError: err => toast.error(err.response?.data?.error || 'Failed to create task'),
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
@@ -33,7 +36,7 @@ function AddTaskForm({ onClose }) {
         <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
         <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           value={form.priority} onChange={e => set('priority', e.target.value)}>
-          {['HIGH','MEDIUM','LOW'].map(p => <option key={p} value={p}>{p}</option>)}
+          {[...TASK_PRIORITIES].reverse().map(p => <option key={p} value={p}>{humanize(p)}</option>)}
         </select>
       </div>
       <Input label="Due date" type="date" value={form.dueDate} onChange={e => set('dueDate', e.target.value)} />
@@ -62,17 +65,18 @@ export default function Tasks() {
   }
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tasks', filter, priority],
+    // `dueTo` is "now", so it stays out of the key (a new key every render would refetch forever).
+    queryKey: qk.tasks.list({ filter, priority }),
     queryFn: () => getTasks(queryParams).then(r => r.data),
   });
 
   const completeMutation = useMutation({
     mutationFn: ({ id, completed }) => completeTask(id, completed),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tasks'] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.tasks.all }); },
   });
   const deleteMutation = useMutation({
     mutationFn: deleteTask,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tasks'] }); toast.success('Task deleted'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.tasks.all }); toast.success('Task deleted'); },
   });
 
   const tasks = data?.tasks || [];
@@ -112,7 +116,7 @@ export default function Tasks() {
         <select value={priority} onChange={e => setPriority(e.target.value)}
           className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
           <option value="">All priorities</option>
-          {['HIGH','MEDIUM','LOW'].map(p => <option key={p} value={p}>{p}</option>)}
+          {[...TASK_PRIORITIES].reverse().map(p => <option key={p} value={p}>{humanize(p)}</option>)}
         </select>
       </div>
 
@@ -140,7 +144,7 @@ export default function Tasks() {
                   <p className={`text-sm font-medium ${task.completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
                     {task.title}
                   </p>
-                  <Badge variant={PRIORITY_VARIANT[task.priority]}>{task.priority}</Badge>
+                  <Badge variant={PRIORITY_VARIANT[task.priority]}>{humanize(task.priority)}</Badge>
                   {overdue && <Badge variant="red">Overdue</Badge>}
                 </div>
                 {task.description && (
@@ -156,7 +160,7 @@ export default function Tasks() {
                   {task.dueDate && (
                     <span className={`flex items-center gap-1 text-xs ${overdue ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
                       <Calendar size={11} />
-                      {new Date(task.dueDate).toLocaleDateString()}
+                      {formatDate(task.dueDate)}
                     </span>
                   )}
                 </div>

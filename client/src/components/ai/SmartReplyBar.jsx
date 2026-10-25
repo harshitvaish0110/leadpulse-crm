@@ -32,7 +32,7 @@ export default function SmartReplyBar({ emailThread, contactId, onUseReply }) {
         tone,
         contactId,
       });
-      setReply(data.replies?.[0] || data.reply || '');
+      setReply(data.reply || '');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to generate reply');
     } finally {

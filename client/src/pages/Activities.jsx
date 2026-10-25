@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { PhoneCall, Mail, Calendar, FileText, MessageSquare, Plus, Trash2 } from 'lucide-react';
 import { getActivities, createActivity, deleteActivity } from '../api/activities';
 import { getContacts } from '../api/contacts';
+import { qk } from '../hooks/queries/keys';
+import { formatDate } from '../lib/format';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import SlideOver from '../components/ui/SlideOver';
@@ -25,13 +27,13 @@ const SENTIMENT_VARIANT = { POSITIVE: 'green', NEGATIVE: 'red', NEUTRAL: 'gray' 
 function AddActivityForm({ onClose }) {
   const qc = useQueryClient();
   const { data: contactsData } = useQuery({
-    queryKey: ['contacts', 'all'],
-    queryFn: () => getContacts({ limit: 100 }).then(r => r.data),
+    queryKey: qk.contacts.options,
+    queryFn: () => getContacts({ limit: 100, sortBy: 'firstName', sortDir: 'asc' }).then(r => r.data),
   });
   const [form, setForm] = useState({ type: 'CALL', subject: '', notes: '', contactId: '', durationMinutes: '' });
   const { mutate, isPending } = useMutation({
     mutationFn: createActivity,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['activities'] }); toast.success('Activity logged'); onClose(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.activities.all }); toast.success('Activity logged'); onClose(); },
     onError: err => toast.error(err.response?.data?.error || 'Failed to log activity'),
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
@@ -87,13 +89,14 @@ export default function Activities() {
   const [page, setPage] = useState(1);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['activities', typeFilter, page],
+    queryKey: qk.activities.list({ type: typeFilter, page }),
     queryFn: () => getActivities({ type: typeFilter || undefined, page, limit: 25 }).then(r => r.data),
+    placeholderData: keepPreviousData,
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteActivity,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['activities'] }); toast.success('Deleted'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.activities.all }); toast.success('Deleted'); },
   });
 
   const activities = data?.activities || [];
@@ -163,7 +166,7 @@ export default function Activities() {
                   )}
                   {a.notes && <p className="text-sm text-gray-500 mt-1.5 line-clamp-2">{a.notes}</p>}
                   <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-                    <span>{new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                    <span>{formatDate(a.occurredAt)}</span>
                     {a.durationMinutes && <span>· {a.durationMinutes} min</span>}
                     {a.user && <span>· by {a.user.firstName} {a.user.lastName}</span>}
                   </div>

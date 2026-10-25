@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -17,23 +17,18 @@ import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import EmptyState from '../../components/ui/EmptyState';
 import DealSummaryPanel from '../../components/ai/DealSummaryPanel';
+import { DEAL_STAGES, LOGGABLE_ACTIVITY_TYPES } from '../../constants/crm';
+import { formatCurrency, formatDate, humanize, probabilityColor, toPercent } from '../../lib/format';
+import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
-
-const STAGES = ['LEAD','CONTACTED','DEMO','PROPOSAL','NEGOTIATION','CLOSED_WON','CLOSED_LOST'];
 const ACTIVITY_ICONS = {
   CALL: PhoneCall, EMAIL: Mail,
   MEETING: Calendar, NOTE: FileText, TRANSCRIPT: MessageSquare,
 };
 
-function formatCurrency(n) {
-  if (!n) return '$0';
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n}`;
-}
-
+/** @param {{ probability: number }} props 0–1 */
 function WinProbGauge({ probability = 0 }) {
-  const pct = Math.round(probability);
+  const pct = toPercent(probability);
   const color = pct > 60 ? '#10b981' : pct > 30 ? '#f59e0b' : '#ef4444';
   const data = [{ name: 'win', value: pct, fill: color }];
   return (
@@ -62,10 +57,12 @@ function LogActivityModal({ dealId, contactId, onClose }) {
   const { mutate, isPending } = useMutation({
     mutationFn: createActivity,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['deal-activities', dealId] });
+      qc.invalidateQueries({ queryKey: qk.activities.all });
+      qc.invalidateQueries({ queryKey: qk.deals.detail(dealId) });
       toast.success('Activity logged');
       onClose();
     },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to log activity'),
   });
   return (
     <form onSubmit={e => { e.preventDefault(); mutate({ ...form, dealId }); }} className="space-y-4">
@@ -73,7 +70,7 @@ function LogActivityModal({ dealId, contactId, onClose }) {
         <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
         <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}>
-          {['CALL','EMAIL','MEETING','NOTE'].map(t => <option key={t} value={t}>{t}</option>)}
+          {LOGGABLE_ACTIVITY_TYPES.map(t => <option key={t} value={t}>{humanize(t)}</option>)}
         </select>
       </div>
       <Input label="Subject" value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
@@ -90,41 +87,83 @@ function LogActivityModal({ dealId, contactId, onClose }) {
   );
 }
 
+/**
+ * Notes are seeded from the loaded deal. The parent remounts this component per
+ * deal (`key={deal.id}`), so the editor never starts empty and overwrites notes.
+ */
+function DealNotes({ dealId, initialNotes }) {
+  const qc = useQueryClient();
+  const [notes, setNotes] = useState(initialNotes ?? '');
+  const timer = useRef(null);
+  const latest = useRef(notes);
+
+  const save = useMutation({
+    mutationFn: (value) => updateDeal(dealId, { notes: value }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.deals.all }),
+    onError: () => toast.error('Could not save notes'),
+  });
+
+  // Flush a pending save when navigating away.
+  useEffect(() => () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      updateDeal(dealId, { notes: latest.current }).catch(() => {});
+    }
+  }, [dealId]);
+
+  const onChange = (value) => {
+    setNotes(value);
+    latest.current = value;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      save.mutate(value);
+    }, 800);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+      <div className="flex items-center justify-between mb-3">
+        <label htmlFor="deal-notes" className="text-sm font-semibold text-gray-700">Notes</label>
+        {save.isPending && <span className="text-xs text-gray-400 animate-pulse">Saving…</span>}
+      </div>
+      <textarea
+        id="deal-notes"
+        className="w-full text-sm text-gray-700 border-0 resize-none focus:outline-none placeholder-gray-300 h-28"
+        placeholder="Add notes about this deal…"
+        value={notes}
+        onChange={e => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
 export default function DealDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [showActivity, setShowActivity] = useState(false);
-  const [notes, setNotes] = useState('');
-  const [notesTimer, setNotesTimer] = useState(null);
 
   const { data: dealData, isLoading } = useQuery({
-    queryKey: ['deal', id],
+    queryKey: qk.deals.detail(id),
     queryFn: () => getDeal(id).then(r => r.data),
-    onSuccess: (d) => setNotes(d.deal?.notes || ''),
   });
 
+  const activityParams = { dealId: id, limit: 20 };
   const { data: activitiesData } = useQuery({
-    queryKey: ['deal-activities', id],
-    queryFn: () => getActivities({ dealId: id, limit: 20 }).then(r => r.data),
+    queryKey: qk.activities.list(activityParams),
+    queryFn: () => getActivities(activityParams).then(r => r.data),
   });
 
   const stageMutation = useMutation({
     mutationFn: (stage) => updateDealStage(id, stage),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['deal', id] }); toast.success('Stage updated'); },
-    onError: () => toast.error('Failed to update stage'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.deals.all });
+      qc.invalidateQueries({ queryKey: qk.analytics.all });
+      toast.success('Stage updated');
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to update stage'),
   });
-
-  const updateMutation = useMutation({
-    mutationFn: (data) => updateDeal(id, data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['deal', id] }),
-  });
-
-  const handleNotesChange = (val) => {
-    setNotes(val);
-    if (notesTimer) clearTimeout(notesTimer);
-    setNotesTimer(setTimeout(() => updateMutation.mutate({ notes: val }), 1000));
-  };
 
   if (isLoading) {
     return (
@@ -138,7 +177,7 @@ export default function DealDetail() {
   const deal = dealData?.deal;
   if (!deal) return <div className="text-center py-20 text-gray-400">Deal not found</div>;
 
-  const winProb = deal.winProbability || 0;
+  const winProb = deal.winProbability ?? 0;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -160,7 +199,7 @@ export default function DealDetail() {
             <div className="mb-4">
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Stage</label>
               <div className="flex gap-1 flex-wrap">
-                {STAGES.map(s => (
+                {DEAL_STAGES.map(s => (
                   <button key={s}
                     onClick={() => stageMutation.mutate(s)}
                     disabled={stageMutation.isPending}
@@ -169,7 +208,7 @@ export default function DealDetail() {
                         ? 'bg-indigo-600 text-white border-indigo-600'
                         : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
                       }`}>
-                    {s.replace('_', ' ')}
+                    {humanize(s)}
                   </button>
                 ))}
               </div>
@@ -180,7 +219,7 @@ export default function DealDetail() {
               {deal.expectedCloseDate && (
                 <div className="flex items-center gap-3 text-gray-600">
                   <Calendar size={15} className="text-gray-400" />
-                  <span>Close: {new Date(deal.expectedCloseDate).toLocaleDateString()}</span>
+                  <span>Close: {formatDate(deal.expectedCloseDate, { dateOnly: true })}</span>
                 </div>
               )}
               {deal.contact && (
@@ -206,24 +245,13 @@ export default function DealDetail() {
             <p className="text-sm font-semibold text-gray-700 mb-4">Win Probability</p>
             <WinProbGauge probability={winProb} />
             <div className="w-full mt-4 h-2 bg-gray-100 rounded-full">
-              <div className={`h-2 rounded-full transition-all ${winProb > 60 ? 'bg-green-500' : winProb > 30 ? 'bg-amber-500' : 'bg-red-400'}`}
-                style={{ width: `${winProb}%` }} />
+              <div className={`h-2 rounded-full transition-all ${probabilityColor(winProb)}`}
+                style={{ width: `${toPercent(winProb)}%` }} />
             </div>
           </div>
 
           {/* Notes — auto-save */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-semibold text-gray-700">Notes</p>
-              {updateMutation.isPending && <span className="text-xs text-gray-400 animate-pulse">Saving…</span>}
-            </div>
-            <textarea
-              className="w-full text-sm text-gray-700 border-0 resize-none focus:outline-none placeholder-gray-300 h-28"
-              placeholder="Add notes about this deal…"
-              value={notes}
-              onChange={e => handleNotesChange(e.target.value)}
-            />
-          </div>
+          <DealNotes key={deal.id} dealId={deal.id} initialNotes={deal.notes} />
 
           {/* AI Deal Briefing */}
           <DealSummaryPanel dealId={id} />
@@ -261,7 +289,7 @@ export default function DealDetail() {
                             <span className={`text-xs ${sentimentColor}`}>{a.sentiment.toLowerCase()}</span>
                           )}
                           <span className="text-xs text-gray-400 ml-auto">
-                            {new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            {formatDate(a.occurredAt, { year: undefined })}
                           </span>
                         </div>
                         {a.notes && <p className="text-sm text-gray-500">{a.notes}</p>}

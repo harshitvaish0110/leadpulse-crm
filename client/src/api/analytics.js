@@ -6,3 +6,4 @@ export const getPipeline = () => api.get('/api/analytics/pipeline');
 export const getWinLoss = () => api.get('/api/analytics/win-loss');
 export const getRepPerformance = () => api.get('/api/analytics/rep-performance');
 export const getSentimentTrends = () => api.get('/api/analytics/sentiment-trends');
+export const getAtRisk = (params) => api.get('/api/analytics/at-risk', { params });

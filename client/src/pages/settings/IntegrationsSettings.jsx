@@ -7,9 +7,36 @@ import toast from 'react-hot-toast';
 
 const INTEGRATIONS = [
   {
+    key: 'gemini',
+    name: 'Google Gemini',
+    description: 'Primary AI provider: chat, deal briefings, email drafts and next-best actions.',
+    envKey: 'GEMINI_API_KEY',
+    placeholder: 'AIza...',
+    docsUrl: 'https://aistudio.google.com/apikey',
+    logo: '✨',
+  },
+  {
+    key: 'groq',
+    name: 'Groq',
+    description: 'First fallback for AI features when Gemini is unavailable or rate limited.',
+    envKey: 'GROQ_API_KEY',
+    placeholder: 'gsk_...',
+    docsUrl: 'https://console.groq.com/keys',
+    logo: '⚡',
+  },
+  {
+    key: 'openrouter',
+    name: 'OpenRouter',
+    description: 'Second fallback using free community models.',
+    envKey: 'OPENROUTER_API_KEY',
+    placeholder: 'sk-or-...',
+    docsUrl: 'https://openrouter.ai/keys',
+    logo: '🔀',
+  },
+  {
     key: 'anthropic',
-    name: 'Anthropic Claude',
-    description: 'Powers AI chat, relationship summaries, and next-action recommendations.',
+    name: 'Anthropic',
+    description: 'Optional provider, used automatically when a key is configured.',
     envKey: 'ANTHROPIC_API_KEY',
     placeholder: 'sk-ant-...',
     docsUrl: 'https://console.anthropic.com/keys',
@@ -18,7 +45,7 @@ const INTEGRATIONS = [
   {
     key: 'openai',
     name: 'OpenAI',
-    description: 'Used for embeddings and fallback language model capabilities.',
+    description: 'Optional provider, used automatically when a key is configured.',
     envKey: 'OPENAI_API_KEY',
     placeholder: 'sk-...',
     docsUrl: 'https://platform.openai.com/api-keys',

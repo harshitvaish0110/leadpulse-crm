@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Search, Building2 } from 'lucide-react';
 import { getCompanies, createCompany, deleteCompany } from '../../api/companies';
@@ -9,6 +9,7 @@ import SlideOver from '../../components/ui/SlideOver';
 import Badge from '../../components/ui/Badge';
 import Skeleton from '../../components/ui/Skeleton';
 import EmptyState from '../../components/ui/EmptyState';
+import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
 
 const INDUSTRY_COLORS = {
@@ -21,7 +22,7 @@ function CompanyForm({ onSuccess, onClose }) {
   const [form, setForm] = useState({ name: '', domain: '', industry: '', size: '', website: '' });
   const { mutate, isPending } = useMutation({
     mutationFn: createCompany,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['companies'] }); toast.success('Company created'); onSuccess?.(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.companies.all }); toast.success('Company created'); onSuccess?.(); },
     onError: (err) => toast.error(err.response?.data?.error || 'Failed to create company'),
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
@@ -63,13 +64,14 @@ export default function CompaniesList() {
   };
 
   const { data, isLoading } = useQuery({
-    queryKey: ['companies', { search, page }],
+    queryKey: qk.companies.list({ search, page }),
     queryFn: () => getCompanies({ search, page, limit: 24 }).then(r => r.data),
+    placeholderData: keepPreviousData,
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteCompany,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['companies'] }); toast.success('Company deleted'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: qk.companies.all }); toast.success('Company deleted'); },
   });
 
   const companies = data?.companies || [];

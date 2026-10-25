@@ -6,7 +6,7 @@ export const createActivity = (data) => api.post('/api/activities', data);
 export const deleteActivity = (id) => api.delete(`/api/activities/${id}`);
 export const uploadAudio = (file, data) => {
   const form = new FormData();
-  form.append('file', file);
+  form.append('audio', file);
   if (data?.contactId) form.append('contactId', data.contactId);
   if (data?.dealId) form.append('dealId', data.dealId);
   return api.post('/api/activities/upload-audio', form, { headers: { 'Content-Type': 'multipart/form-data' } });

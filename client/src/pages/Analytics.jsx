@@ -6,6 +6,8 @@ import { getRevenue, getPipeline, getWinLoss, getRepPerformance, getSentimentTre
 import Skeleton from '../components/ui/Skeleton';
 import Avatar from '../components/ui/Avatar';
 import Badge from '../components/ui/Badge';
+import { formatCurrency, formatDate, formatPercent } from '../lib/format';
+import { qk } from '../hooks/queries/keys';
 
 const STAGE_COLORS = {
   LEAD: '#6366f1', CONTACTED: '#8b5cf6', DEMO: '#a78bfa',
@@ -29,12 +31,6 @@ function StatCard({ label, value, sub, color = 'indigo', icon: Icon }) {
   );
 }
 
-function formatCurrency(n) {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n || 0}`;
-}
-
 const SentimentTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -49,14 +45,14 @@ const SentimentTooltip = ({ active, payload, label }) => {
 export default function Analytics() {
   const [activeTab, setActiveTab] = useState('overview');
 
-  const { data: revenueData, isLoading: rl } = useQuery({ queryKey: ['analytics','revenue'], queryFn: () => getRevenue().then(r => r.data) });
-  const { data: pipelineData, isLoading: pl } = useQuery({ queryKey: ['analytics','pipeline'], queryFn: () => getPipeline().then(r => r.data) });
-  const { data: winLossData, isLoading: wl } = useQuery({ queryKey: ['analytics','win-loss'], queryFn: () => getWinLoss().then(r => r.data) });
-  const { data: repsData, isLoading: repsL } = useQuery({ queryKey: ['analytics','reps'], queryFn: () => getRepPerformance().then(r => r.data) });
-  const { data: sentimentData } = useQuery({ queryKey: ['analytics','sentiment'], queryFn: () => getSentimentTrends().then(r => r.data) });
+  const { data: revenueData, isLoading: rl } = useQuery({ queryKey: qk.analytics.report('revenue'), queryFn: () => getRevenue().then(r => r.data) });
+  const { data: pipelineData, isLoading: pl } = useQuery({ queryKey: qk.analytics.report('pipeline'), queryFn: () => getPipeline().then(r => r.data) });
+  const { data: winLossData, isLoading: wl } = useQuery({ queryKey: qk.analytics.report('win-loss'), queryFn: () => getWinLoss().then(r => r.data) });
+  const { data: repsData, isLoading: repsL } = useQuery({ queryKey: qk.analytics.report('rep-performance'), queryFn: () => getRepPerformance().then(r => r.data) });
+  const { data: sentimentData } = useQuery({ queryKey: qk.analytics.report('sentiment-trends'), queryFn: () => getSentimentTrends().then(r => r.data) });
 
   const chartData = (revenueData?.historical || []).map(m => ({
-    month: new Date(m.ds).toLocaleString('default', { month: 'short' }), revenue: m.y,
+    month: formatDate(m.ds, { dateOnly: true, day: undefined, year: undefined }), revenue: m.y,
   }));
 
   const pipelineStages = (pipelineData?.stages || []).map(s => ({
@@ -99,7 +95,7 @@ export default function Analytics() {
               value={pipelineData ? formatCurrency(pipelineData.totalPipelineValue) : '–'}
               sub="All active deals" />
             <StatCard icon={Target} label="Win Rate" color="amber"
-              value={winLossData ? `${winLossData.winRate}%` : '–'}
+              value={winLossData ? formatPercent(winLossData.winRate) : '–'}
               sub={`${winLossData?.won ?? 0} won / ${winLossData?.lost ?? 0} lost`} />
             <StatCard icon={Award} label="Avg Monthly Rev" color="purple"
               value={revenueData ? formatCurrency(revenueData.avgMonthly) : '–'}
@@ -147,7 +143,7 @@ export default function Analytics() {
                       <p className="text-xs text-gray-400">Won</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-2xl font-bold text-gray-900">{winLossData?.winRate}%</p>
+                      <p className="text-2xl font-bold text-gray-900">{formatPercent(winLossData?.winRate)}</p>
                       <p className="text-xs text-gray-400">Win Rate</p>
                     </div>
                     <div className="text-center">
@@ -199,7 +195,7 @@ export default function Analytics() {
                     <td className="px-5 py-3 text-sm text-gray-600">{s.count}</td>
                     <td className="px-5 py-3 text-sm text-gray-600">{formatCurrency(s.totalValue)}</td>
                     <td className="px-5 py-3 text-sm text-gray-600">{formatCurrency(s.weightedValue)}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{s.avgWinProb}%</td>
+                    <td className="px-5 py-3 text-sm text-gray-600">{formatPercent(s.avgWinProb)}</td>
                   </tr>
                 ))}
               </tbody>
