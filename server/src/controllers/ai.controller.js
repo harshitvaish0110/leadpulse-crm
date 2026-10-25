@@ -19,30 +19,13 @@ async function findContact(user, contactId, args) {
   return contact;
 }
 
-const SSE_HEADERS = {
-  'Content-Type':  'text/event-stream',
-  'Cache-Control': 'no-cache',
-  'Connection':    'keep-alive',
-};
-
-function sseWrite(res, data, end = false) {
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-  if (end) res.end();
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/ai/chat?question=...&history=[]
+// POST /api/ai/chat  { question }  (SSE: delta / done / error)
 // ─────────────────────────────────────────────────────────────────────────────
 async function chat(req, res) {
-  const question = (req.query.question || '').trim();
-
-  Object.entries(SSE_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
-  res.flushHeaders?.();
-
-  if (!question) {
-    sseWrite(res, { error: 'No question provided', done: true, sources: [] }, true);
-    return;
-  }
+  const question = String(req.body?.question ?? '').trim();
+  if (!question) throw ApiError.badRequest('question is required');
+  if (question.length > 2000) throw ApiError.validation([{ path: 'question', msg: 'question is too long (max 2000 characters)' }]);
 
   // No record context for now: the old ML-side retrieval ignored ownership, so it
   // stays disabled until retrieval is scoped to the caller.
@@ -55,7 +38,10 @@ async function chat(req, res) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function composeEmail(req, res, next) {
   try {
-    const { contactId, context, tone = 'professional' } = req.body;
+    const { contactId, context, bulletPoints, tone = 'professional' } = req.body ?? {};
+    const notes = Array.isArray(bulletPoints) && bulletPoints.length
+      ? bulletPoints.map((b) => `- ${b}`).join('\n')
+      : context;
     const contact = await findContact(req.user, contactId, {
       include: {
         company:    { select: { name: true, industry: true } },
@@ -73,7 +59,8 @@ Title: ${contact.title || 'unknown'}
 Company: ${contact.company?.name || 'their company'} (${contact.company?.industry || 'unknown industry'})
 Recent interactions:
 ${recentActivity || 'No recent interactions'}
-Additional context: ${context || 'none'}
+Points to cover:
+${notes || 'none'}
 
 Return JSON only: { "subject": "...", "body": "..." }`;
 
@@ -87,7 +74,7 @@ Return JSON only: { "subject": "...", "body": "..." }`;
 // ─────────────────────────────────────────────────────────────────────────────
 async function dealSummary(req, res, next) {
   try {
-    const dealId = req.params.dealId || req.params.id || req.body.dealId;
+    const dealId = req.params.id || req.body?.dealId;
     const deal   = await prisma.deal.findFirst({
       where:   { id: dealId, ...scopeFor(req.user, 'deal') },
       include: {
@@ -107,7 +94,7 @@ async function dealSummary(req, res, next) {
 Deal: ${deal.title}
 Value: $${Number(deal.value).toLocaleString()}
 Stage: ${deal.stage}
-Win Probability: ${deal.winProbability || 0}%
+Win Probability: ${Math.round((deal.winProbability ?? 0) * 100)}%
 Expected Close: ${deal.expectedCloseDate?.toISOString().slice(0, 10) || 'not set'}
 Contact: ${deal.contact?.firstName} ${deal.contact?.lastName} (${deal.contact?.company?.name || 'unknown'})
 Owner: ${deal.owner?.firstName} ${deal.owner?.lastName}
@@ -137,8 +124,12 @@ Write:
 // ─────────────────────────────────────────────────────────────────────────────
 async function smartReply(req, res, next) {
   try {
-    const { emailContent, contactId, tone = 'professional' } = req.body;
-    if (!emailContent) throw ApiError.badRequest('emailContent required');
+    const { contactId, tone = 'professional' } = req.body ?? {};
+    const emailThread = (req.body?.emailThread ?? req.body?.emailContent ?? '').trim();
+    if (!emailThread) throw ApiError.badRequest('emailThread is required');
+    if (!['professional', 'casual', 'urgent'].includes(tone)) {
+      throw ApiError.validation([{ path: 'tone', msg: 'tone must be professional, casual or urgent' }]);
+    }
 
     let contactContext = '';
     if (contactId) {
@@ -148,17 +139,16 @@ async function smartReply(req, res, next) {
       contactContext = `Replying to: ${contact.firstName} ${contact.lastName} (${contact.company?.name || ''})`;
     }
 
-    const prompt = `Generate 3 smart reply options for this email.
+    const prompt = `Write one ${tone} reply to the latest message in this email thread.
 ${contactContext}
 
-Original email:
-${emailContent}
+Email thread:
+${emailThread}
 
-Write 3 reply options with different approaches (brief, detailed, question-based).
-Return JSON only: { "replies": ["reply1", "reply2", "reply3"] }`;
+Return JSON only: { "reply": "..." }`;
 
     const result = await ai.getJSON(prompt, `You write ${tone} sales email replies.`);
-    res.json({ success: true, ...result });
+    res.json({ success: true, tone, reply: result.reply ?? result.replies?.[0] ?? '' });
   } catch (err) { next(err); }
 }
 
@@ -167,8 +157,9 @@ Return JSON only: { "replies": ["reply1", "reply2", "reply3"] }`;
 // ─────────────────────────────────────────────────────────────────────────────
 async function nextAction(req, res, next) {
   try {
-    const contactId = req.params.id || req.body.contactId;
-    const dealId    = req.body.dealId;
+    const body      = req.body ?? {};
+    const contactId = req.params.id || body.contactId;
+    const dealId    = body.dealId;
 
     if (!contactId && !dealId) throw ApiError.badRequest('contactId or dealId required');
     if (dealId) await prisma.deal.findFirstOrThrow({ where: { id: dealId, ...scopeFor(req.user, 'deal') }, select: { id: true } });
@@ -206,7 +197,7 @@ Return JSON only: { "action": "specific action description", "reason": "why", "u
 // ─────────────────────────────────────────────────────────────────────────────
 async function enrichContact(req, res, next) {
   try {
-    const contact = await findContact(req.user, req.body.contactId, { include: { company: true } });
+    const contact = await findContact(req.user, req.body?.contactId, { include: { company: true } });
 
     // Clearbit first if configured
     if (process.env.CLEARBIT_API_KEY && contact.email) {
