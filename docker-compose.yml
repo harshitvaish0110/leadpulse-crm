@@ -35,7 +35,8 @@ services:
     volumes:
       - ./server:/app
       - /app/node_modules
-    command: sh -c "npx prisma migrate deploy && npx prisma generate && npm run dev"
+    # -L: poll for changes (file events don't cross Docker bind mounts on Windows/macOS)
+    command: sh -c "npx prisma migrate deploy && npx prisma generate && npm run dev -- -L"
 
   ml-service:
     build:
@@ -66,6 +67,7 @@ services:
     env_file: .env
     environment:
       VITE_PROXY_TARGET: http://server:3001
+      CHOKIDAR_USEPOLLING: "true"
     depends_on:
       - server
     volumes:
