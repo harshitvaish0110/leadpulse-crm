@@ -83,3 +83,65 @@ jobs:
       - run: npm run lint
       - run: npm test -- --run
       - run: npm run build
+
+  e2e:
+    needs: [server, client]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: leadpulse_e2e
+          POSTGRES_USER: leadpulse
+          POSTGRES_PASSWORD: leadpulse_secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U leadpulse -d leadpulse_e2e"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://leadpulse:leadpulse_secret@localhost:5432/leadpulse_e2e?schema=public
+      JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+      - name: Prepare API and demo data
+        working-directory: server
+        run: npm ci && npx prisma migrate deploy && npx prisma generate && npm run seed
+      - name: Start API
+        working-directory: server
+        env:
+          NODE_ENV: test # no rate limits or background jobs during the run
+        run: node server.js > ../api.log 2>&1 &
+      - name: Install web app and browser
+        working-directory: client
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Start web app
+        working-directory: client
+        env:
+          VITE_PROXY_TARGET: http://localhost:3001
+        run: npx vite --port 5173 --strictPort > ../web.log 2>&1 &
+      - name: Wait for both servers
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3001/health >/dev/null && curl -sf -o /dev/null http://localhost:5173 && exit 0
+            sleep 2
+          done
+          echo "::error::Servers did not start"; cat api.log web.log; exit 1
+      - name: Smoke test
+        working-directory: client
+        run: npm run e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            api.log
+            web.log
+            client/test-results/
+          retention-days: 7
