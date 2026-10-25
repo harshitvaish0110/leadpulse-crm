@@ -102,7 +102,8 @@ async function createDeal(user, input) {
 }
 
 /**
- * Moves a deal to `{ stage }` and/or `{ pipelineStageId }`. A no-op when nothing changes.
+ * Moves a deal to `{ stage }` and/or `{ pipelineStageId }` (plus an optional `lostReason`
+ * when it enters CLOSED_LOST). A no-op when nothing changes.
  */
 async function changeStage(user, dealId, target) {
   const where = { id: dealId, ...scopeFor(user, 'deal') };
@@ -117,7 +118,12 @@ async function changeStage(user, dealId, target) {
     if (unchanged) return { before, deal: await tx.deal.findFirst({ where, include: DEAL_LIST_INCLUDE }), changed: false };
 
     const next = await resolveStage(tx, target);
-    const deal = await tx.deal.update({ where, data: { ...next, ...stageEffects(next.stage, now) }, include: DEAL_LIST_INCLUDE });
+    const lostReason = next.stage === 'CLOSED_LOST' && target.lostReason ? String(target.lostReason).trim().slice(0, 200) : undefined;
+    const deal = await tx.deal.update({
+      where,
+      data: { ...next, ...stageEffects(next.stage, now), ...(lostReason && { lostReason }) },
+      include: DEAL_LIST_INCLUDE,
+    });
     await tx.dealStageHistory.create({
       data: {
         dealId, fromStage: before.stage, toStage: next.stage,
