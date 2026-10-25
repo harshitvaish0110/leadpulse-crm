@@ -1,106 +1,101 @@
 """
-Revenue forecasting route using Prophet.
-Accepts historical monthly revenue data and returns a 90-day forward forecast
-with confidence intervals (yhat_lower, yhat_upper).
+Monthly revenue forecast.
+
+POST /forecast/revenue  { historical: [{ ds: "YYYY-MM-01", y }], periods: 3 }
+  -> { forecast: [{ ds, yhat, yhat_lower, yhat_upper }], source: "prophet" | "linear" }
+
+Prophet (yearly seasonality, 80 % interval) is imported only when needed; with
+fewer than 6 months of history, or if Prophet fails, a least-squares trend with
+an 80 % band is used instead. Fitting is slow on small instances, so the API
+caches the result rather than calling this per page view.
 """
 
-from flask import Blueprint, request, jsonify
-import warnings
-warnings.filterwarnings("ignore")
+import datetime as dt
+
+import numpy as np
+from flask import Blueprint, jsonify, request
 
 forecast_bp = Blueprint("forecast", __name__)
+
+MIN_PROPHET_POINTS = 6
+MAX_PERIODS = 12
+Z_80 = 1.2816  # two-sided 80 % interval
+
+
+def _add_months(date: dt.date, months: int) -> dt.date:
+    index = date.month - 1 + months
+    return dt.date(date.year + index // 12, index % 12 + 1, 1)
+
+
+def linear_forecast(values: list[float], last: dt.date, periods: int) -> list[dict]:
+    x = np.arange(len(values), dtype=float)
+    y = np.asarray(values, dtype=float)
+    if len(values) >= 2:
+        slope, intercept = np.polyfit(x, y, 1)
+        residual = y - (slope * x + intercept)
+        spread = float(residual.std(ddof=1)) if len(values) > 2 else abs(float(y.mean())) * 0.2
+    else:
+        slope, intercept, spread = 0.0, float(y[0]), abs(float(y[0])) * 0.2
+    out = []
+    for step in range(1, periods + 1):
+        yhat = max(0.0, slope * (len(values) - 1 + step) + intercept)
+        margin = Z_80 * spread
+        out.append({
+            "ds": _add_months(last, step).isoformat(),
+            "yhat": round(yhat, 2),
+            "yhat_lower": round(max(0.0, yhat - margin), 2),
+            "yhat_upper": round(yhat + margin, 2),
+        })
+    return out
+
+
+def prophet_forecast(dates: list[dt.date], values: list[float], periods: int) -> list[dict]:
+    import logging
+
+    # Set before importing Prophet: it logs about the (deliberately absent) plotting libraries on import.
+    logging.getLogger("prophet.plot").setLevel(logging.CRITICAL)
+    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+
+    import pandas as pd
+    from prophet import Prophet
+    frame = pd.DataFrame({"ds": pd.to_datetime(dates), "y": values})
+    # Yearly seasonality needs two full years of months to be identifiable.
+    model = Prophet(interval_width=0.8, yearly_seasonality=len(values) >= 24, weekly_seasonality=False, daily_seasonality=False)
+    model.fit(frame)
+    future = model.make_future_dataframe(periods=periods, freq="MS", include_history=False)
+    predicted = model.predict(future)
+    return [
+        {
+            "ds": row.ds.date().isoformat(),
+            "yhat": round(max(0.0, row.yhat), 2),
+            "yhat_lower": round(max(0.0, row.yhat_lower), 2),
+            "yhat_upper": round(max(0.0, row.yhat_upper), 2),
+        }
+        for row in predicted.itertuples()
+    ]
 
 
 @forecast_bp.route("/revenue", methods=["POST"])
 def revenue():
-    """
-    POST /forecast/revenue
-    Body: { "historical": [{ "ds": "2024-01-01", "y": 12500 }, ...] }
-    Returns: { "forecast": [{ "ds": "...", "yhat": ..., "yhat_lower": ..., "yhat_upper": ... }] }
-    Requires at least 2 data points. Returns 90-day forward forecast.
-    """
-    data = request.get_json(silent=True) or {}
-    historical = data.get("historical", [])
-
-    if len(historical) < 2:
-        return jsonify({
-            "forecast": [],
-            "message": "Need at least 2 months of historical data for forecasting",
-        }), 200
+    body = request.get_json(silent=True) or {}
+    historical = body.get("historical")
+    periods = body.get("periods", 3)
+    if not isinstance(historical, list):
+        return jsonify({"error": "historical must be a list"}), 400
+    if not isinstance(periods, int) or not 1 <= periods <= MAX_PERIODS:
+        return jsonify({"error": f"periods must be between 1 and {MAX_PERIODS}"}), 422
 
     try:
-        import pandas as pd
-        from prophet import Prophet
+        points = sorted((dt.date.fromisoformat(str(p["ds"])[:10]).replace(day=1), float(p["y"])) for p in historical)
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "each point needs ds (YYYY-MM-DD) and a numeric y"}), 422
+    if len(points) < 2:
+        return jsonify({"forecast": [], "source": "none", "message": "At least two months of history are needed"})
 
-        df = pd.DataFrame(historical)
-        df["ds"] = pd.to_datetime(df["ds"])
-        df["y"]  = pd.to_numeric(df["y"], errors="coerce").fillna(0)
-
-        # Remove outliers that would skew the model (values > 10x median)
-        median = df["y"].median()
-        if median > 0:
-            df = df[df["y"] <= median * 10]
-
-        model = Prophet(
-            interval_width=0.80,
-            yearly_seasonality=True,
-            weekly_seasonality=False,
-            daily_seasonality=False,
-            seasonality_mode="multiplicative" if df["y"].min() > 0 else "additive",
-        )
-        model.fit(df)
-
-        # Forecast 90 days ahead
-        future   = model.make_future_dataframe(periods=90, freq="D")
-        forecast = model.predict(future)
-
-        # Return only future portion (after last historical date)
-        future_only = forecast[forecast["ds"] > df["ds"].max()][
-            ["ds", "yhat", "yhat_lower", "yhat_upper"]
-        ].copy()
-
-        # Clip negative values
-        for col in ["yhat", "yhat_lower", "yhat_upper"]:
-            future_only[col] = future_only[col].clip(lower=0).round(2)
-
-        future_only["ds"] = future_only["ds"].dt.strftime("%Y-%m-%d")
-
-        return jsonify({
-            "forecast": future_only.to_dict(orient="records"),
-            "periods": len(future_only),
-        })
-
-    except ImportError:
-        # Prophet not installed — return a simple linear extrapolation
-        return _linear_extrapolation(historical)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-def _linear_extrapolation(historical: list) -> tuple:
-    """Simple linear trend extrapolation when Prophet is not available."""
-    import datetime
-
-    values = [h["y"] for h in historical]
-    if len(values) < 2:
-        return jsonify({"forecast": [], "message": "Not enough data"}), 200
-
-    # Calculate average monthly growth
-    avg = sum(values) / len(values)
-    growth = (values[-1] - values[0]) / max(len(values) - 1, 1)
-
-    last_date = datetime.date.fromisoformat(historical[-1]["ds"])
-    forecast = []
-    for i in range(1, 91):
-        d = last_date + datetime.timedelta(days=i)
-        # Daily value estimate with slight growth
-        daily_val = max(0, (avg + growth * (i / 30)) / 30)
-        margin = daily_val * 0.2
-        forecast.append({
-            "ds": d.isoformat(),
-            "yhat": round(daily_val, 2),
-            "yhat_lower": round(max(0, daily_val - margin), 2),
-            "yhat_upper": round(daily_val + margin, 2),
-        })
-
-    return jsonify({"forecast": forecast, "source": "linear-extrapolation"})
+    dates, values = [d for d, _ in points], [v for _, v in points]
+    if len(points) >= MIN_PROPHET_POINTS:
+        try:
+            return jsonify({"forecast": prophet_forecast(dates, values, periods), "source": "prophet"})
+        except Exception as err:  # noqa: BLE001 — degrade to the linear trend
+            print(f"[forecast] prophet failed, using linear trend: {err}", flush=True)
+    return jsonify({"forecast": linear_forecast(values, dates[-1], periods), "source": "linear"})
