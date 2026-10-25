@@ -1,0 +1,52 @@
+{
+  "churn": {
+    "version": "2026.10.25-3",
+    "trained_at": "2026-10-25T23:29:52+00:00",
+    "n_samples": 262,
+    "positives": 52,
+    "features": [
+      "days_since_last_contact",
+      "activity_count_30d",
+      "activity_count_90d",
+      "avg_sentiment",
+      "deal_count",
+      "total_deal_value",
+      "has_open_deal"
+    ],
+    "metrics": {
+      "roc_auc": 0.8947,
+      "brier": 0.0944,
+      "accuracy": 0.8664
+    },
+    "libraries": {
+      "scikit-learn": "1.6.1",
+      "xgboost": "3.0.2",
+      "numpy": "2.2.6"
+    }
+  },
+  "win": {
+    "version": "2026.10.25-3",
+    "trained_at": "2026-10-25T23:29:52+00:00",
+    "n_samples": 323,
+    "positives": 160,
+    "features": [
+      "stage_ordinal",
+      "deal_value",
+      "days_in_current_stage",
+      "total_activities",
+      "activity_last_7d",
+      "contact_seniority",
+      "company_size"
+    ],
+    "metrics": {
+      "roc_auc": 0.7136,
+      "brier": 0.2254,
+      "accuracy": 0.6347
+    },
+    "libraries": {
+      "scikit-learn": "1.6.1",
+      "xgboost": "3.0.2",
+      "numpy": "2.2.6"
+    }
+  }
+}
