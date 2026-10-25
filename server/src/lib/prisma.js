@@ -8,7 +8,8 @@
 
 'use strict';
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+// The repository-root .env (server.js loads the same file); real environment variables take precedence.
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env'), quiet: true });
 
 const { PrismaClient } = require('@prisma/client');
 const { PrismaPg }     = require('@prisma/adapter-pg');
