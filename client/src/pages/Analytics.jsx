@@ -1,28 +1,45 @@
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie } from 'recharts';
-import { TrendingUp, DollarSign, Target, Award } from 'lucide-react';
-import { getRevenue, getPipeline, getWinLoss, getRepPerformance, getSentimentTrends } from '../api/analytics';
+import { useSearchParams } from 'react-router-dom';
+import {
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from 'recharts';
+import { DollarSign, TrendingUp, Target, Award } from 'lucide-react';
+import api from '../api/axiosInstance';
 import Skeleton from '../components/ui/Skeleton';
-import Avatar from '../components/ui/Avatar';
-import Badge from '../components/ui/Badge';
-import { formatCurrency, formatDate, formatPercent } from '../lib/format';
+import ErrorBoundary from '../components/ErrorBoundary';
+import RevenueForecastChart from '../components/charts/RevenueForecastChart';
+import { formatCurrency, formatDate, formatPercent, humanize } from '../lib/format';
 import { qk } from '../hooks/queries/keys';
+import { useAuthStore } from '../store/authStore';
 
-const STAGE_COLORS = {
-  LEAD: '#6366f1', CONTACTED: '#8b5cf6', DEMO: '#a78bfa',
-  PROPOSAL: '#f59e0b', NEGOTIATION: '#f97316',
-  CLOSED_WON: '#10b981', CLOSED_LOST: '#ef4444',
-};
+const RANGES = [['30d', 'Last 30 days', 30], ['90d', 'Last 90 days', 90], ['6mo', 'Last 6 months', 182], ['1yr', 'Last 12 months', 365]];
+const FUNNEL_COLORS = ['#6366f1', '#8b5cf6', '#a78bfa', '#f59e0b', '#f97316', '#10b981'];
+const day = (d) => d.toISOString().slice(0, 10);
 
-function StatCard({ label, value, sub, color = 'indigo', icon: Icon }) {
+/** `range` from the URL → { from, to } as UTC days. Custom ranges look like "custom:2026-01-01,2026-03-31". */
+function resolveRange(range) {
+  if (range?.startsWith('custom:')) {
+    const [from, to] = range.slice(7).split(',');
+    if (from && to) return { from, to };
+  }
+  const days = (RANGES.find(([key]) => key === range) ?? RANGES[3])[2];
+  const now = new Date();
+  return { from: day(new Date(now.getTime() - days * 86_400_000)), to: day(now) };
+}
+
+function useReport(name, range) {
+  return useQuery({
+    queryKey: qk.analytics.report(name, range),
+    queryFn: () => api.get(`/api/analytics/${name}`, { params: range }).then((r) => r.data),
+  });
+}
+
+function StatCard({ label, value, sub, icon: Icon, color = 'indigo' }) {
   const bg = { indigo: 'bg-indigo-50 text-indigo-600', green: 'bg-green-50 text-green-600', amber: 'bg-amber-50 text-amber-600', purple: 'bg-purple-50 text-purple-600' };
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
       <div className="flex items-center gap-3 mb-2">
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${bg[color]}`}>
-          <Icon size={18} />
-        </div>
+        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${bg[color]}`}><Icon size={18} /></div>
         <p className="text-sm text-gray-500">{label}</p>
       </div>
       <p className="text-2xl font-bold text-gray-900">{value}</p>
@@ -31,246 +48,197 @@ function StatCard({ label, value, sub, color = 'indigo', icon: Icon }) {
   );
 }
 
-const SentimentTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="bg-white rounded-xl shadow-lg border border-gray-100 p-3">
-      <p className="text-xs text-gray-500 mb-1">Week of {label}</p>
-      <p className="text-sm font-bold text-gray-900">Avg: {payload[0].value.toFixed(2)}</p>
-      <p className="text-xs text-gray-400">{payload[1]?.value} interactions</p>
-    </div>
-  );
-};
+const Panel = ({ title, sub, loading, children, className = '' }) => (
+  <section className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-6 ${className}`}>
+    <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+    <p className="text-sm text-gray-400 mb-4">{sub}</p>
+    {loading ? <Skeleton className="h-56 w-full" /> : children}
+  </section>
+);
 
 export default function Analytics() {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [params, setParams] = useSearchParams();
+  const rangeKey = params.get('range') || '1yr';
+  const range = resolveRange(rangeKey);
+  const isPrivileged = useAuthStore((s) => ['ADMIN', 'MANAGER'].includes(s.user?.role));
+  const setRange = (value) => setParams(value === '1yr' ? {} : { range: value }, { replace: true });
+  const custom = rangeKey.startsWith('custom:');
+  const rangeLabel = `${formatDate(`${range.from}T00:00:00Z`, { dateOnly: true })} – ${formatDate(`${range.to}T00:00:00Z`, { dateOnly: true })}`;
 
-  const { data: revenueData, isLoading: rl } = useQuery({ queryKey: qk.analytics.report('revenue'), queryFn: () => getRevenue().then(r => r.data) });
-  const { data: pipelineData, isLoading: pl } = useQuery({ queryKey: qk.analytics.report('pipeline'), queryFn: () => getPipeline().then(r => r.data) });
-  const { data: winLossData, isLoading: wl } = useQuery({ queryKey: qk.analytics.report('win-loss'), queryFn: () => getWinLoss().then(r => r.data) });
-  const { data: repsData, isLoading: repsL } = useQuery({ queryKey: qk.analytics.report('rep-performance'), queryFn: () => getRepPerformance().then(r => r.data) });
-  const { data: sentimentData } = useQuery({ queryKey: qk.analytics.report('sentiment-trends'), queryFn: () => getSentimentTrends().then(r => r.data) });
+  const revenue = useReport('revenue', range);
+  const pipeline = useReport('pipeline', {});
+  const winLoss = useReport('win-loss', range);
+  const reps = useReport('rep-performance', range);
+  const sentiment = useReport('sentiment-trends', range);
+  const funnel = useReport('funnel', range);
+  const sources = useReport('lead-sources', range);
 
-  const chartData = (revenueData?.historical || []).map(m => ({
-    month: formatDate(m.ds, { dateOnly: true, day: undefined, year: undefined }), revenue: m.y,
-  }));
-
-  const pipelineStages = (pipelineData?.stages || []).map(s => ({
-    name: s.stage.replace('_', ' '), count: s.count, value: s.totalValue,
-  }));
-
-  const sentimentChart = (sentimentData?.trends || []).map(t => ({
-    week: t.week.slice(5), avg: t.avgScore, count: t.count,
-  }));
-
-  const pieData = winLossData ? [
-    { name: 'Won', value: winLossData.won, fill: '#10b981' },
-    { name: 'Lost', value: winLossData.lost, fill: '#ef4444' },
+  const winPie = winLoss.data ? [
+    { name: 'Won', value: winLoss.data.won, fill: '#10b981' },
+    { name: 'Lost', value: winLoss.data.lost, fill: '#ef4444' },
   ] : [];
-
-  const TABS = ['overview', 'pipeline', 'team', 'sentiment'];
+  const lostReasons = Object.entries(winLoss.data?.lostReasons || {}).sort((a, b) => b[1] - a[1]);
+  const funnelData = (funnel.data?.baseStages || []).map((s) => ({ name: humanize(s.baseStage), count: s.count }));
+  const sentimentData = (sentiment.data?.trends || []).map((t) => ({ week: t.week, avg: t.avgScore, count: t.count }));
+  const repData = (reps.data?.reps || []).map((r) => ({ name: `${r.user.firstName} ${r.user.lastName[0]}.`, revenue: r.revenue, won: r.wonDeals }));
+  const sourceData = (sources.data?.sources || []).filter((s) => s.count > 0);
 
   return (
     <div className="space-y-6">
-      {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
-        {TABS.map(t => (
-          <button key={t} onClick={() => setActiveTab(t)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all capitalize
-              ${activeTab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
-            {t}
-          </button>
-        ))}
+      {/* Date range (applies to every report) */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <p className="text-sm text-gray-500">{rangeLabel}</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1 bg-gray-100 rounded-xl p-1" role="group" aria-label="Date range">
+            {RANGES.map(([key, label]) => (
+              <button key={key} onClick={() => setRange(key)} aria-pressed={rangeKey === key}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${rangeKey === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
+                {label.replace('Last ', '')}
+              </button>
+            ))}
+          </div>
+          <label className="text-xs text-gray-500 flex items-center gap-1">From
+            <input type="date" value={range.from} max={range.to} onChange={(e) => e.target.value && setRange(`custom:${e.target.value},${range.to}`)}
+              className={`text-sm border rounded-lg px-2 py-1.5 ${custom ? 'border-indigo-400' : 'border-gray-300'}`} />
+          </label>
+          <label className="text-xs text-gray-500 flex items-center gap-1">to
+            <input type="date" value={range.to} min={range.from} onChange={(e) => e.target.value && setRange(`custom:${range.from},${e.target.value}`)}
+              className={`text-sm border rounded-lg px-2 py-1.5 ${custom ? 'border-indigo-400' : 'border-gray-300'}`} />
+          </label>
+        </div>
       </div>
 
-      {/* OVERVIEW TAB */}
-      {activeTab === 'overview' && (
-        <div className="space-y-6">
-          {/* Stats Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            <StatCard icon={DollarSign} label="Total Revenue" color="green"
-              value={revenueData ? formatCurrency(revenueData.totalRevenue) : '–'}
-              sub={`Avg ${formatCurrency(revenueData?.avgMonthly ?? 0)}/mo`} />
-            <StatCard icon={TrendingUp} label="Pipeline Value" color="indigo"
-              value={pipelineData ? formatCurrency(pipelineData.totalPipelineValue) : '–'}
-              sub="All active deals" />
-            <StatCard icon={Target} label="Win Rate" color="amber"
-              value={winLossData ? formatPercent(winLossData.winRate) : '–'}
-              sub={`${winLossData?.won ?? 0} won / ${winLossData?.lost ?? 0} lost`} />
-            <StatCard icon={Award} label="Avg Monthly Rev" color="purple"
-              value={revenueData ? formatCurrency(revenueData.avgMonthly) : '–'}
-              sub="12-month average" />
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <StatCard icon={DollarSign} label="Revenue" color="green" value={revenue.data ? formatCurrency(revenue.data.totalRevenue) : '–'}
+          sub={revenue.data ? `Avg ${formatCurrency(revenue.data.avgMonthly)} / month` : ''} />
+        <StatCard icon={TrendingUp} label="Open pipeline" color="indigo" value={pipeline.data ? formatCurrency(pipeline.data.totalPipelineValue) : '–'} sub="All open deals today" />
+        <StatCard icon={Target} label="Win rate" color="amber" value={winLoss.data ? formatPercent(winLoss.data.winRate) : '–'}
+          sub={winLoss.data ? `${winLoss.data.won} won / ${winLoss.data.lost} lost` : ''} />
+        <StatCard icon={Award} label="Deals created" color="purple" value={funnel.data ? funnel.data.total.toLocaleString() : '–'} sub="Entered the funnel in this range" />
+      </div>
 
-          {/* Revenue + Win/Loss */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-              <h2 className="text-base font-semibold text-gray-900 mb-1">Monthly Revenue</h2>
-              <p className="text-sm text-gray-400 mb-5">Closed-won deals last 12 months</p>
-              {rl ? <Skeleton className="h-52 w-full" /> : (
-                <ResponsiveContainer width="100%" height={208}>
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="revGrad2" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}K`} />
-                    <Tooltip formatter={(v) => [formatCurrency(v), 'Revenue']} />
-                    <Area type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={2.5} fill="url(#revGrad2)" dot={false} />
-                  </AreaChart>
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <ErrorBoundary compact>
+          <Panel title="Revenue" sub="Won deals per month, with a 3-month forecast" loading={revenue.isLoading} className="xl:col-span-2">
+            <RevenueForecastChart historical={revenue.data?.historical} forecast={revenue.data?.forecast} height={260} />
+          </Panel>
+        </ErrorBoundary>
+        <ErrorBoundary compact>
+          <Panel title="Win / loss" sub="Deals closed in this range" loading={winLoss.isLoading}>
+            {winLoss.data?.total ? (
+              <>
+                <ResponsiveContainer width="100%" height={150}>
+                  <PieChart>
+                    <Pie data={winPie} dataKey="value" nameKey="name" innerRadius={45} outerRadius={65} paddingAngle={2}>
+                      {winPie.map((d) => <Cell key={d.name} fill={d.fill} />)}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
                 </ResponsiveContainer>
-              )}
-            </div>
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-              <h2 className="text-base font-semibold text-gray-900 mb-1">Win / Loss</h2>
-              <p className="text-sm text-gray-400 mb-5">Last 12 months</p>
-              {wl ? <Skeleton className="h-52 w-full" /> : (
-                <div className="flex flex-col items-center">
-                  <ResponsiveContainer width="100%" height={150}>
-                    <PieChart>
-                      <Pie data={pieData} innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={3}>
-                        {pieData.map((e, i) => <Cell key={i} fill={e.fill} />)}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="flex gap-6 mt-2">
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-green-600">{winLossData?.won}</p>
-                      <p className="text-xs text-gray-400">Won</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-gray-900">{formatPercent(winLossData?.winRate)}</p>
-                      <p className="text-xs text-gray-400">Win Rate</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-red-500">{winLossData?.lost}</p>
-                      <p className="text-xs text-gray-400">Lost</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+                <ul className="mt-3 space-y-1">
+                  {lostReasons.map(([reason, count]) => (
+                    <li key={reason} className="flex justify-between text-xs text-gray-600"><span>{reason}</span><span className="font-medium">{count}</span></li>
+                  ))}
+                </ul>
+              </>
+            ) : <p className="text-sm text-gray-400 text-center py-12">No deals closed in this range</p>}
+          </Panel>
+        </ErrorBoundary>
+      </div>
 
-      {/* PIPELINE TAB */}
-      {activeTab === 'pipeline' && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-5">Pipeline by Stage</h2>
-            {pl ? <Skeleton className="h-72 w-full" /> : (
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={pipelineStages}>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <ErrorBoundary compact>
+          <Panel title="Pipeline funnel" sub="Of the deals created in this range, how many reached each stage" loading={funnel.isLoading}>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={funnelData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={36} />
+                <Tooltip formatter={(v) => [v, 'Deals']} />
+                <Bar dataKey="count" radius={[4, 4, 0, 0]}>{funnelData.map((_, i) => <Cell key={i} fill={FUNNEL_COLORS[i]} />)}</Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Panel>
+        </ErrorBoundary>
+        <ErrorBoundary compact>
+          <Panel title="Rep performance" sub={isPrivileged ? 'Revenue and deals won per rep' : 'Your revenue and deals won'} loading={reps.isLoading}>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={repData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="revenue" tickFormatter={(v) => formatCurrency(v)} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={56} />
+                <YAxis yAxisId="won" orientation="right" allowDecimals={false} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={30} />
+                <Tooltip formatter={(v, n) => (n === 'Revenue' ? [formatCurrency(v), n] : [v, n])} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar yAxisId="revenue" dataKey="revenue" name="Revenue" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="won" dataKey="won" name="Deals won" fill="#10b981" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Panel>
+        </ErrorBoundary>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <ErrorBoundary compact>
+          <Panel title="Sentiment trend" sub="Average sentiment of scored activities per week (0–1)" loading={sentiment.isLoading} className="xl:col-span-2">
+            {sentimentData.length ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={sentimentData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v, n) => [n === 'count' ? v : formatCurrency(v), n === 'count' ? 'Deals' : 'Value']} />
-                  <Bar dataKey="count" name="count" radius={[4,4,0,0]}>
-                    {pipelineStages.map((e, i) => <Cell key={i} fill={STAGE_COLORS[e.name.replace(' ','_')] || '#6366f1'} />)}
-                  </Bar>
-                </BarChart>
+                  <XAxis dataKey="week" tickFormatter={(w) => formatDate(`${w}T00:00:00Z`, { dateOnly: true, year: undefined })} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 1]} tickFormatter={(v) => v.toFixed(1)} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={32} />
+                  <Tooltip labelFormatter={(w) => `Week of ${formatDate(`${w}T00:00:00Z`, { dateOnly: true })}`}
+                    formatter={(v, n, p) => [`${v.toFixed(2)} (${p.payload.count} activities)`, 'Average']} />
+                  <Line type="monotone" dataKey="avg" stroke="#8b5cf6" strokeWidth={2.5} dot={false} />
+                </LineChart>
               </ResponsiveContainer>
-            )}
-          </div>
+            ) : <p className="text-sm text-gray-400 text-center py-12">No scored activities in this range</p>}
+          </Panel>
+        </ErrorBoundary>
+        <ErrorBoundary compact>
+          <Panel title="Lead sources" sub="New contacts by source tag" loading={sources.isLoading}>
+            {sourceData.length ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <PieChart>
+                  <Pie data={sourceData} dataKey="count" nameKey="tag" outerRadius={80} label={({ tag }) => tag}>
+                    {sourceData.map((s, i) => <Cell key={s.tag} fill={FUNNEL_COLORS[i % FUNNEL_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => [v, 'Contacts']} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : <p className="text-sm text-gray-400 text-center py-12">No new contacts with a source tag</p>}
+          </Panel>
+        </ErrorBoundary>
+      </div>
 
-          {/* Stage breakdown table */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <ErrorBoundary compact>
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <h2 className="text-base font-semibold text-gray-900 px-6 pt-5">Pipeline by stage</h2>
+          <p className="text-sm text-gray-400 px-6 mb-3">Today's snapshot; weighted value = sum of deal value × win probability</p>
+          <div className="overflow-x-auto">
             <table className="w-full">
-              <thead><tr className="border-b border-gray-100">
-                {['Stage','Deals','Total Value','Weighted Value','Avg Win Prob'].map(h => (
-                  <th key={h} className="text-left text-xs font-semibold text-gray-500 px-5 py-3 uppercase">{h}</th>
-                ))}
-              </tr></thead>
+              <thead>
+                <tr className="border-y border-gray-100">
+                  {['Stage', 'Deals', 'Total value', 'Weighted value', 'Avg win probability'].map((h) => (
+                    <th key={h} scope="col" className="text-left text-xs font-semibold text-gray-500 px-6 py-3 uppercase">{h}</th>
+                  ))}
+                </tr>
+              </thead>
               <tbody className="divide-y divide-gray-50">
-                {(pipelineData?.stages || []).map(s => (
-                  <tr key={s.stage} className="hover:bg-gray-50">
-                    <td className="px-5 py-3">
-                      <span className="text-sm font-medium text-gray-800">{s.stage.replace('_',' ')}</span>
-                    </td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{s.count}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{formatCurrency(s.totalValue)}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{formatCurrency(s.weightedValue)}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{formatPercent(s.avgWinProb)}</td>
+                {(pipeline.data?.stages || []).map((s) => (
+                  <tr key={s.stage} className="even:bg-gray-50/50">
+                    <td className="px-6 py-3 text-sm font-medium text-gray-900">{humanize(s.stage)}</td>
+                    <td className="px-6 py-3 text-sm text-gray-600">{s.count}</td>
+                    <td className="px-6 py-3 text-sm text-gray-600">{formatCurrency(s.totalValue)}</td>
+                    <td className="px-6 py-3 text-sm text-gray-600">{formatCurrency(s.weightedValue)}</td>
+                    <td className="px-6 py-3 text-sm text-gray-600">{formatPercent(s.avgWinProb)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* TEAM TAB */}
-      {activeTab === 'team' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h2 className="text-base font-semibold text-gray-900">Rep Performance</h2>
-            <p className="text-sm text-gray-400">Last 12 months</p>
-          </div>
-          {repsL ? <div className="p-6"><Skeleton lines={6} /></div> : (
-            <table className="w-full">
-              <thead><tr className="border-b border-gray-100">
-                {['Rep','Won Deals','Revenue','Open Deals','Contacts','Activities'].map(h => (
-                  <th key={h} className="text-left text-xs font-semibold text-gray-500 px-5 py-3 uppercase">{h}</th>
-                ))}
-              </tr></thead>
-              <tbody className="divide-y divide-gray-50">
-                {(repsData?.reps || []).map((r, i) => (
-                  <tr key={r.user.id} className="hover:bg-gray-50">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-3">
-                        {i === 0 && <span className="text-amber-500">🥇</span>}
-                        {i === 1 && <span>🥈</span>}
-                        {i === 2 && <span>🥉</span>}
-                        <Avatar firstName={r.user.firstName} lastName={r.user.lastName} size="sm" />
-                        <span className="text-sm font-medium text-gray-900">{r.user.firstName} {r.user.lastName}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3"><Badge variant="green">{r.wonDeals}</Badge></td>
-                    <td className="px-5 py-3 text-sm font-medium text-gray-900">{formatCurrency(r.revenue)}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{r.openDeals}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{r.contacts}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{r.activities}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {/* SENTIMENT TAB */}
-      {activeTab === 'sentiment' && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-1">Sentiment Trends</h2>
-            <p className="text-sm text-gray-400 mb-5">Weekly average sentiment score (ML-powered)</p>
-            {sentimentChart.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-12">No sentiment data yet — log notes and activities to build trends</p>
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={sentimentChart}>
-                  <defs>
-                    <linearGradient id="sentGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.2} />
-                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="week" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <YAxis domain={[-1, 1]} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<SentimentTooltip />} />
-                  <Area type="monotone" dataKey="avg" stroke="#8b5cf6" strokeWidth={2.5} fill="url(#sentGrad)" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      )}
+        </section>
+      </ErrorBoundary>
     </div>
   );
 }
