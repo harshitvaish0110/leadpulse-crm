@@ -65,3 +65,27 @@ describe('csv mapping', async () => {
     expect(missingRequired({ A: 'firstName' }).map((f) => f.key)).toEqual(['lastName', 'email']);
   });
 });
+
+describe('task grouping', async () => {
+  const { groupTasks, monthGrid } = await import('./taskGroups');
+  // Wednesday 15 Oct 2025, local time.
+  const now = new Date(2025, 9, 15, 14, 0);
+  const at = (d, h = 10) => new Date(2025, 9, d, h).toISOString();
+
+  it('splits by local day and week (Monday to Sunday)', () => {
+    const g = groupTasks([
+      { id: 'a', dueDate: at(14, 23) }, { id: 'b', dueDate: at(15, 8) }, { id: 'c', dueDate: at(15, 23) },
+      { id: 'd', dueDate: at(19, 12) }, { id: 'e', dueDate: at(20, 9) }, { id: 'f', dueDate: null },
+    ], now);
+    const ids = (k) => g[k].map((t) => t.id);
+    expect([ids('overdue'), ids('today'), ids('week'), ids('later'), ids('none')])
+      .toEqual([['a'], ['b', 'c'], ['d'], ['e'], ['f']]);
+  });
+
+  it('builds a 6-week month grid starting on Monday', () => {
+    const grid = monthGrid(new Date(2025, 9, 1));
+    expect(grid).toHaveLength(42);
+    expect(grid[0].getDay()).toBe(1);
+    expect(grid.some((d) => d.getMonth() === 9 && d.getDate() === 31)).toBe(true);
+  });
+});
