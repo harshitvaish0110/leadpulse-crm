@@ -70,6 +70,7 @@ test('CHECK constraints reject out-of-range scores', async () => {
     `UPDATE contacts SET "leadScore" = 121`,
     `UPDATE contacts SET "leadScoreLabel" = 'LUKEWARM'`,
     `UPDATE org_settings SET id = 2`,
+    `UPDATE deals SET "winProbability" = 45`,
   ];
   for (const sql of cases) {
     await inRollback(async (db) => {
