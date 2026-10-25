@@ -7,6 +7,7 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/',       ctrl.list);
+router.get('/industries', ctrl.industries);
 router.post('/',      ctrl.create);
 router.get('/:id',    ctrl.getOne);
 router.patch('/:id',  ctrl.update);

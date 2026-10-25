@@ -160,4 +160,12 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, create, getOne, update, remove };
+/** GET /api/companies/industries — distinct industries for the list filter. */
+async function industries(_req, res) {
+  const rows = await prisma.company.findMany({
+    where: { industry: { not: null } }, distinct: ['industry'], select: { industry: true }, orderBy: { industry: 'asc' },
+  });
+  res.json({ success: true, industries: rows.map((r) => r.industry) });
+}
+
+module.exports = { list, create, getOne, update, remove, industries };
