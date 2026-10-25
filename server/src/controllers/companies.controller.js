@@ -6,7 +6,7 @@
 
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
-const { scopeFor } = require('../middleware/auth.middleware');
+const { scoped, scopeFor } = require('../middleware/auth.middleware');
 
 const COMPANY_LIST_INCLUDE = {
   _count: { select: { contacts: true } },
@@ -106,9 +106,16 @@ async function getOne(req, res, next) {
       where:   { id: req.params.id },
       include: companyDetailInclude(req.user),
     });
-
     if (!company) throw ApiError.notFound('Company not found');
-    res.json({ success: true, company });
+
+    // Counts follow the caller's scope, like the tabs they summarise.
+    const atCompany = { contact: { companyId: company.id } };
+    const [contacts, deals, activities] = await Promise.all([
+      prisma.contact.count({ where: scoped(req.user, 'contact', { companyId: company.id }) }),
+      prisma.deal.count({ where: scoped(req.user, 'deal', atCompany) }),
+      prisma.activity.count({ where: scoped(req.user, 'activity', atCompany) }),
+    ]);
+    res.json({ success: true, company: { ...company, stats: { contacts, deals, activities } } });
   } catch (err) {
     next(err);
   }

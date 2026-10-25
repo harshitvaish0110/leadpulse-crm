@@ -12,5 +12,6 @@ router.get('/pipeline',          ctrl.pipeline);
 router.get('/win-loss',          ctrl.winLoss);
 router.get('/rep-performance',   ctrl.repPerformance);
 router.get('/sentiment-trends',  ctrl.sentimentTrends);
+router.get('/at-risk',           ctrl.atRisk);
 
 module.exports = router;

@@ -19,7 +19,7 @@ const activitiesScope = (req, where) => scoped(req.user, 'activity', where);
 
 /**
  * GET /api/analytics/revenue
- * Monthly revenue from CLOSED_WON deals over the past 12 months.
+ * Monthly revenue from deals won (by close date) over the past 12 months.
  */
 async function revenue(req, res, next) {
   try {
@@ -28,17 +28,17 @@ async function revenue(req, res, next) {
 
     const deals = await prisma.deal.findMany({
       where: dealsScope(req, {
-        stage:     'CLOSED_WON',
-        createdAt: { gte: since },
+        stage:    'CLOSED_WON',
+        closedAt: { gte: since },
       }),
-      select: { value: true, createdAt: true },
-      orderBy: { createdAt: 'asc' },
+      select: { value: true, closedAt: true },
+      orderBy: { closedAt: 'asc' },
     });
 
     // Group by YYYY-MM
     const monthly = {};
     for (const deal of deals) {
-      const key = deal.createdAt.toISOString().slice(0, 7); // "2024-01"
+      const key = deal.closedAt.toISOString().slice(0, 7); // "2024-01"
       monthly[key] = (monthly[key] || 0) + Number(deal.value);
     }
 
@@ -67,40 +67,41 @@ async function revenue(req, res, next) {
 
 /**
  * GET /api/analytics/pipeline
- * Count and total value of deals per stage.
+ * Per stage: deal count, total value, mean win probability (0–1) and
+ * probability-weighted value (sum of value × winProbability).
  */
-async function pipeline(req, res, next) {
-  try {
-    const STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
+async function pipeline(req, res) {
+  const STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
+  const rows = await prisma.deal.findMany({
+    where:  dealsScope(req),
+    select: { stage: true, value: true, winProbability: true },
+  });
 
-    const results = await Promise.all(
-      STAGES.map(async (stage) => {
-        const [count, aggregate] = await Promise.all([
-          prisma.deal.count({ where: dealsScope(req, { stage }) }),
-          prisma.deal.aggregate({
-            where:  dealsScope(req, { stage }),
-            _sum:   { value: true },
-            _avg:   { winProbability: true },
-          }),
-        ]);
-        return {
-          stage,
-          count,
-          totalValue:      Number(aggregate._sum.value ?? 0),
-          avgWinProb:      Number((aggregate._avg.winProbability ?? 0).toFixed(2)),
-          weightedValue:   Math.round(
-            Number(aggregate._sum.value ?? 0) * Number(aggregate._avg.winProbability ?? 0)
-          ),
-        };
-      })
-    );
-
-    const totalPipelineValue = results.reduce((s, r) => s + r.totalValue, 0);
-
-    res.json({ success: true, stages: results, totalPipelineValue });
-  } catch (err) {
-    next(err);
+  const byStage = Object.fromEntries(STAGES.map((stage) => [stage, { stage, count: 0, totalValue: 0, probSum: 0, weightedValue: 0 }]));
+  for (const d of rows) {
+    const s = byStage[d.stage];
+    const value = Number(d.value);
+    s.count += 1;
+    s.totalValue += value;
+    s.probSum += d.winProbability;
+    s.weightedValue += value * d.winProbability;
   }
+
+  const stages = STAGES.map((stage) => {
+    const { count, totalValue, probSum, weightedValue } = byStage[stage];
+    return {
+      stage,
+      count,
+      totalValue:    Math.round(totalValue),
+      avgWinProb:    count ? Number((probSum / count).toFixed(3)) : 0,
+      weightedValue: Math.round(weightedValue),
+    };
+  });
+  const totalPipelineValue = stages
+    .filter((s) => s.stage !== 'CLOSED_WON' && s.stage !== 'CLOSED_LOST')
+    .reduce((sum, s) => sum + s.totalValue, 0);
+
+  res.json({ success: true, stages, totalPipelineValue });
 }
 
 /**
@@ -113,16 +114,16 @@ async function winLoss(req, res, next) {
     since.setFullYear(since.getFullYear() - 1);
 
     const [won, lost] = await Promise.all([
-      prisma.deal.count({ where: dealsScope(req, { stage: 'CLOSED_WON',  createdAt: { gte: since } }) }),
-      prisma.deal.count({ where: dealsScope(req, { stage: 'CLOSED_LOST', createdAt: { gte: since } }) }),
+      prisma.deal.count({ where: dealsScope(req, { stage: 'CLOSED_WON',  closedAt: { gte: since } }) }),
+      prisma.deal.count({ where: dealsScope(req, { stage: 'CLOSED_LOST', closedAt: { gte: since } }) }),
     ]);
 
     const total   = won + lost;
-    const winRate = total > 0 ? Math.round((won / total) * 100) : 0;
+    const winRate = total > 0 ? Number((won / total).toFixed(3)) : 0;
 
     // Lost reasons breakdown
     const lostDeals = await prisma.deal.findMany({
-      where:  dealsScope(req, { stage: 'CLOSED_LOST', createdAt: { gte: since }, lostReason: { not: null } }),
+      where:  dealsScope(req, { stage: 'CLOSED_LOST', closedAt: { gte: since }, lostReason: { not: null } }),
       select: { lostReason: true },
     });
 
@@ -157,9 +158,9 @@ async function repPerformance(req, res, next) {
     const reps = await Promise.all(
       users.map(async (user) => {
         const [wonDeals, aggregate, openDeals] = await Promise.all([
-          prisma.deal.count({ where: { ownerId: user.id, stage: 'CLOSED_WON', createdAt: { gte: since } } }),
+          prisma.deal.count({ where: { ownerId: user.id, stage: 'CLOSED_WON', closedAt: { gte: since } } }),
           prisma.deal.aggregate({
-            where:  { ownerId: user.id, stage: 'CLOSED_WON', createdAt: { gte: since } },
+            where:  { ownerId: user.id, stage: 'CLOSED_WON', closedAt: { gte: since } },
             _sum:   { value: true },
           }),
           prisma.deal.count({
@@ -254,7 +255,7 @@ async function overview(req, res, next) {
       prisma.deal.count({ where: dealsScope(req) }),
       prisma.deal.count({ where: dealsScope(req, { stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] } }) }),
       prisma.deal.aggregate({
-        where:  dealsScope(req, { stage: 'CLOSED_WON', createdAt: { gte: since30d } }),
+        where:  dealsScope(req, { stage: 'CLOSED_WON', closedAt: { gte: since30d } }),
         _sum:   { value: true },
       }),
       prisma.task.count({ where: tasksScope(req, { completed: false, dueDate: { lt: new Date() } }) }),
@@ -276,4 +277,31 @@ async function overview(req, res, next) {
   }
 }
 
-module.exports = { revenue, pipeline, winLoss, repPerformance, sentimentTrends, overview };
+/**
+ * GET /api/analytics/at-risk?limit=5
+ * Contacts with churnRisk > 0.6 or sentimentScore < 0.3, riskiest first.
+ */
+async function atRisk(req, res) {
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 5));
+  const where = contactsScope(req, {
+    status: { not: 'CHURNED' },
+    OR: [{ churnRisk: { gt: 0.6 } }, { sentimentScore: { lt: 0.3 } }],
+  });
+  const [contacts, total] = await Promise.all([
+    prisma.contact.findMany({
+      where,
+      orderBy: [{ churnRisk: 'desc' }, { sentimentScore: 'asc' }],
+      take: limit,
+      select: {
+        id: true, firstName: true, lastName: true, email: true,
+        churnRisk: true, sentimentScore: true, leadScoreLabel: true,
+        company: { select: { id: true, name: true } },
+        owner: { select: { id: true, firstName: true, lastName: true } },
+      },
+    }),
+    prisma.contact.count({ where }),
+  ]);
+  res.json({ success: true, contacts, total });
+}
+
+module.exports = { revenue, pipeline, winLoss, repPerformance, sentimentTrends, overview, atRisk };
