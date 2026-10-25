@@ -20,6 +20,7 @@ const analyticsRoutes  = require('./routes/analytics.routes');
 const aiRoutes         = require('./routes/ai.routes');
 const usersRoutes      = require('./routes/users.routes');
 const settingsRoutes   = require('./routes/settings.routes');
+const emailRoutes      = require('./routes/emails.routes');
 
 const { ApiError, errorHandler, notFoundHandler } = require('./middleware/error.middleware');
 const { allowedOrigins } = require('./lib/env');
@@ -77,6 +78,7 @@ function createApp() {
   app.use('/api/ai',         aiRoutes);
   app.use('/api/users',      usersRoutes);
   app.use('/api/settings',   settingsRoutes);
+  app.use('/api/emails',     emailRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
