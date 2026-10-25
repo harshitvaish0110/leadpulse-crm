@@ -19,13 +19,14 @@ const { body }   = require('express-validator');
 
 const { authenticate } = require('../middleware/auth.middleware');
 const { validate }     = require('../middleware/validate');
-const { limiter }      = require('../middleware/rateLimit');
+const { limiter, ipAndEmail } = require('../middleware/rateLimit');
 const ctrl             = require('../controllers/auth.controller');
 
 const router = Router();
 
 const MIN = 60_000;
-const loginLimit    = limiter({ windowMs: 15 * MIN, limit: 10 });
+// Only failed sign-ins count, per IP and email address.
+const loginLimit    = limiter({ windowMs: 15 * MIN, limit: 10, keyGenerator: ipAndEmail, skipSuccessfulRequests: true });
 const registerLimit = limiter({ windowMs: 60 * MIN, limit: 5 });
 const refreshLimit  = limiter({ windowMs: 15 * MIN, limit: 60 });
 
