@@ -46,3 +46,22 @@ describe('createSSEParser', () => {
     expect(done).toHaveBeenCalledOnce();
   });
 });
+
+describe('csv mapping', async () => {
+  const { guessMapping, applyMapping, missingRequired } = await import('./csvMapping');
+
+  it('maps common header spellings and leaves unknown columns unmapped', () => {
+    const mapping = guessMapping(['First_Name', 'Surname', 'E-mail', 'Organisation', 'Favourite colour', 'first']);
+    expect(mapping).toEqual({
+      First_Name: 'firstName', Surname: 'lastName', 'E-mail': 'email',
+      Organisation: 'company', 'Favourite colour': '', first: '',
+    });
+    expect(missingRequired(mapping)).toEqual([]);
+  });
+
+  it('applies the mapping and drops empty cells', () => {
+    const rows = applyMapping([{ A: ' Ann ', B: '', C: 'x' }], { A: 'firstName', B: 'phone', C: '' });
+    expect(rows).toEqual([{ firstName: 'Ann' }]);
+    expect(missingRequired({ A: 'firstName' }).map((f) => f.key)).toEqual(['lastName', 'email']);
+  });
+});
