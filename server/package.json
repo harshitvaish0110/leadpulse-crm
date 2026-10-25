@@ -12,7 +12,8 @@
     "generate": "npx prisma generate",
     "studio": "npx prisma studio",
     "test": "node --test \"test/unit/**/*.test.js\"",
-    "test:integration": "node --test --test-concurrency=1 \"test/integration/**/*.test.js\""
+    "test:integration": "node --test --test-concurrency=1 \"test/integration/**/*.test.js\"",
+    "score": "node src/jobs/scoring.job.js"
   },
   "keywords": [],
   "author": "",

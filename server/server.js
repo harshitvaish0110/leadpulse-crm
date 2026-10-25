@@ -48,8 +48,8 @@ async function bootstrap() {
     console.log(`    Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`    Health:      http://localhost:${PORT}/health\n`);
 
-    // Register background jobs after server is fully up
-    require('./src/jobs/scoring.job');
+    // Register background jobs after the server is up (not in tests).
+    if (process.env.NODE_ENV !== 'test') require('./src/jobs/scoring.job').startScoringSchedule();
   });
 
   // ── Graceful shutdown ───────────────────────────────────────────────────────
