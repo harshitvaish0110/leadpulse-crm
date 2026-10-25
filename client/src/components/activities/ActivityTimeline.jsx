@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PhoneCall, Mail, Calendar, FileText, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
+import { PhoneCall, Mail, Calendar, FileText, MessageSquare, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import Avatar from '../ui/Avatar';
 import { SentimentBadge } from '../crm/Indicators';
 import { formatDate, humanize } from '../../lib/format';
@@ -34,9 +34,10 @@ function TranscriptDetails({ metadata, transcript }) {
 
 /**
  * Chronological list of activities.
- * `showContact` adds the contact link (feeds that span contacts), `showDeal` the deal link.
+ * `showContact` adds the contact link (feeds that span contacts), `showDeal` the deal link,
+ * and `onDelete` a delete button per item.
  */
-export default function ActivityTimeline({ activities, showContact = false, showDeal = true }) {
+export default function ActivityTimeline({ activities, showContact = false, showDeal = true, onDelete }) {
   return (
     <ol className="relative">
       <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100" aria-hidden="true" />
@@ -52,6 +53,10 @@ export default function ActivityTimeline({ activities, showContact = false, show
                 <span className="text-sm font-medium text-gray-800">{a.subject || humanize(a.type)}</span>
                 <SentimentBadge value={a.sentiment} />
                 <time className="text-xs text-gray-400 ml-auto" dateTime={a.occurredAt}>{formatDate(a.occurredAt, { hour: 'numeric', minute: '2-digit' })}</time>
+                {onDelete && (
+                  <button onClick={() => onDelete(a)} aria-label={`Delete ${a.subject || humanize(a.type)}`}
+                    className="p-1 text-gray-300 hover:text-red-600 rounded"><Trash2 size={13} /></button>
+                )}
               </div>
               <div className="flex items-center gap-2 flex-wrap text-xs text-gray-500">
                 {showContact && a.contact && (
