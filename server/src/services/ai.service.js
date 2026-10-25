@@ -3,7 +3,7 @@
  *
  * Provider chain (in order):
  *   1. Google Gemini  (GEMINI_API_KEY)     — primary, best quality
- *   2. Groq / Llama   (GROQ_API_KEY)       — first fallback, very fast
+ *   2. Groq           (GROQ_API_KEY)       — first fallback, very fast
  *   3. OpenRouter     (OPENROUTER_API_KEY) — second fallback, many free models
  *
  * Any provider whose API key is missing in .env is silently skipped.
@@ -26,6 +26,7 @@
 const { GoogleGenAI } = require('@google/genai');
 const Groq            = require('groq-sdk');
 const axios           = require('axios');
+const { ApiError }    = require('../middleware/error.middleware');
 
 // ── Lazy-init clients ─────────────────────────────────────────────────────────
 let _gemini = null;
@@ -40,6 +41,17 @@ function getGroq() {
   if (!_groq) _groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
   return _groq;
 }
+
+// Model ids change as providers retire them, so they come from the environment.
+const MODELS = {
+  gemini:     process.env.GEMINI_MODEL     || 'gemini-2.5-flash',
+  groq:       process.env.GROQ_MODEL       || 'openai/gpt-oss-120b',
+  openrouter: process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free',
+};
+
+// Gemini 2.5 "thinking" spends the output-token budget before answering, which
+// truncates short JSON replies; these calls don't need it.
+const GEMINI_NO_THINKING = { thinkingConfig: { thinkingBudget: 0 } };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const RETRY_DELAY  = 2000; // ms between retries per provider
@@ -64,11 +76,12 @@ const PROVIDERS = [
     async getText(prompt, systemPrompt, maxTokens) {
       const ai = getGemini();
       const response = await ai.models.generateContent({
-        model:    'models/gemini-2.5-flash',
+        model:    MODELS.gemini,
         config: {
           systemInstruction: systemPrompt || 'You are a helpful CRM assistant.',
           maxOutputTokens:   maxTokens || 400,
           temperature:       0.5,
+          ...GEMINI_NO_THINKING,
         },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
       });
@@ -78,40 +91,40 @@ const PROVIDERS = [
     async getJSON(prompt, systemPrompt) {
       const ai = getGemini();
       const response = await ai.models.generateContent({
-        model:    'models/gemini-2.5-flash',
+        model:    MODELS.gemini,
         config: {
           systemInstruction:
             (systemPrompt || 'You are a helpful assistant.') +
             ' IMPORTANT: Reply with valid JSON only. No markdown fences, no explanation.',
-          maxOutputTokens:  800,
+          maxOutputTokens:  1500,
           temperature:      0.2,
           responseMimeType: 'application/json',
+          ...GEMINI_NO_THINKING,
         },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
       });
       return JSON.parse(stripFences(response.text));
     },
 
-    async stream(prompt, systemPrompt, res) {
+    async stream(prompt, systemPrompt, emit) {
       const ai = getGemini();
       const response = await ai.models.generateContentStream({
-        model:    'models/gemini-2.5-flash',
+        model:    MODELS.gemini,
         config: {
           systemInstruction: systemPrompt || 'You are a helpful CRM assistant.',
           maxOutputTokens:   1200,
           temperature:       0.7,
+          ...GEMINI_NO_THINKING,
         },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
       });
       for await (const chunk of response) {
-        if (chunk.text) {
-          res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
-        }
+        if (chunk.text) emit(chunk.text);
       }
     },
   },
 
-  // ── 2. Groq / Llama 3.1 ─────────────────────────────────────────────────────
+  // ── 2. Groq ─────────────────────────────────────────────────────────────────
   {
     name:      'Groq',
     available: () => !!process.env.GROQ_API_KEY,
@@ -126,7 +139,7 @@ const PROVIDERS = [
     async getText(prompt, systemPrompt, maxTokens) {
       const groq = getGroq();
       const res  = await groq.chat.completions.create({
-        model:       'llama-3.3-70b-versatile',
+        model:       MODELS.groq,
         messages:    this._buildMessages(prompt, systemPrompt || 'You are a helpful CRM assistant.'),
         temperature: 0.5,
         max_tokens:  maxTokens || 400,
@@ -137,7 +150,7 @@ const PROVIDERS = [
     async getJSON(prompt, systemPrompt) {
       const groq = getGroq();
       const res  = await groq.chat.completions.create({
-        model:           'llama-3.3-70b-versatile',
+        model:           MODELS.groq,
         messages:        this._buildMessages(prompt, systemPrompt || 'You are a helpful assistant.'),
         temperature:     0.2,
         max_tokens:      800,
@@ -146,10 +159,10 @@ const PROVIDERS = [
       return JSON.parse(res.choices[0].message.content);
     },
 
-    async stream(prompt, systemPrompt, res) {
+    async stream(prompt, systemPrompt, emit) {
       const groq = getGroq();
       const stream = await groq.chat.completions.create({
-        model:       'llama-3.3-70b-versatile',
+        model:       MODELS.groq,
         messages:    this._buildMessages(prompt, systemPrompt || 'You are a helpful CRM assistant.'),
         temperature: 0.7,
         max_tokens:  1200,
@@ -157,12 +170,12 @@ const PROVIDERS = [
       });
       for await (const chunk of stream) {
         const text = chunk.choices[0]?.delta?.content || '';
-        if (text) res.write(`data: ${JSON.stringify({ text })}\n\n`);
+        if (text) emit(text);
       }
     },
   },
 
-  // ── 3. OpenRouter (free Llama 3.1 8B) ────────────────────────────────────────
+  // ── 3. OpenRouter (free community models) ────────────────────────────────────
   {
     name:      'OpenRouter',
     available: () => !!process.env.OPENROUTER_API_KEY,
@@ -187,7 +200,7 @@ const PROVIDERS = [
       const res = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
-          model:       'google/gemma-4-31b-it:free',
+          model:       MODELS.openrouter,
           messages:    this._buildMessages(prompt, systemPrompt || 'You are a helpful CRM assistant.'),
           temperature: 0.5,
           max_tokens:  maxTokens || 400,
@@ -203,7 +216,7 @@ const PROVIDERS = [
       const res = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
-          model:       'google/gemma-4-31b-it:free',
+          model:       MODELS.openrouter,
           messages:    this._buildMessages(jsonPrompt, systemPrompt || 'You are a helpful assistant.'),
           temperature: 0.2,
           max_tokens:  800,
@@ -213,10 +226,10 @@ const PROVIDERS = [
       return JSON.parse(stripFences(res.data.choices[0].message.content));
     },
 
-    async stream(prompt, systemPrompt, res) {
+    async stream(prompt, systemPrompt, emit) {
       // OpenRouter free tier: do a regular (non-streaming) call, then emit as one chunk
       const text = await this.getText(prompt, systemPrompt, 1200);
-      res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      emit(text);
     },
   },
 ];
@@ -235,9 +248,7 @@ async function withFallback(method, ...args) {
   const available = PROVIDERS.filter(p => p.available());
 
   if (available.length === 0) {
-    throw new Error(
-      'No AI provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY in .env'
-    );
+    throw new ApiError('No AI provider is configured. Add GEMINI_API_KEY, GROQ_API_KEY or OPENROUTER_API_KEY.', 503, 'AI_NOT_CONFIGURED');
   }
 
   let lastErr;
@@ -249,6 +260,7 @@ async function withFallback(method, ...args) {
         return await provider[method](...args);
       } catch (err) {
         lastErr = err;
+        if (method === 'stream' && args[2]?.started) throw err;
         const status = err.status || err.response?.status || err.code || 0;
         console.warn(`[AI] ${provider.name} failed: HTTP ${status} — ${err.message}`);
 
@@ -262,7 +274,11 @@ async function withFallback(method, ...args) {
     console.warn(`[AI] ${provider.name} exhausted, trying next provider...`);
   }
 
-  throw lastErr;
+  // Every provider failed (quota, outage, bad output): an upstream problem, not a server bug.
+  throw Object.assign(
+    new ApiError('The AI service is temporarily unavailable. Please try again in a moment.', 502, 'AI_UNAVAILABLE'),
+    { cause: lastErr },
+  );
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -289,29 +305,37 @@ async function getJSON(prompt, systemPrompt = '') {
 }
 
 /**
- * Stream an AI response as SSE to the HTTP response object.
- * Sets headers, writes chunks, and calls res.end().
+ * Streams an AI response as server-sent events and ends the response:
+ *   event: delta  data: {"text": "..."}   (repeated)
+ *   event: done   data: {}               or
+ *   event: error  data: {"code", "message"}
+ * Stops reading from the provider as soon as the client disconnects.
  * @param {string} prompt
  * @param {string} [systemPrompt]
  * @param {object} res  Express response object
  */
 async function streamResponse(prompt, systemPrompt = '', res) {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', process.env.CLIENT_URL || '*');
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
-  try {
-    await withFallback('stream', prompt, systemPrompt, res);
-  } catch (err) {
-    console.error('[AI streamResponse] All providers failed:', err.message);
-    res.write(
-      `data: ${JSON.stringify({ text: '\n[AI temporarily unavailable — please try again in a moment]' })}\n\n`
-    );
-  }
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const emit = (text) => {
+    if (res.destroyed) throw Object.assign(new Error('Client disconnected'), { name: 'AbortError' });
+    emit.started = true;
+    send('delta', { text });
+  };
+  emit.started = false;
 
-  res.write('data: [DONE]\n\n');
+  try {
+    await withFallback('stream', prompt, systemPrompt, emit);
+    send('done', {});
+  } catch (err) {
+    if (res.destroyed) return;
+    console.error('[AI streamResponse] stream failed:', err.message);
+    send('error', { code: 'AI_UNAVAILABLE', message: 'The AI service is temporarily unavailable. Please try again.' });
+  }
   res.end();
 }
 
