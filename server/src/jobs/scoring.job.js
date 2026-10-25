@@ -155,11 +155,13 @@ async function runNightlyScoring() {
 
 // ── Schedule ──────────────────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== 'test') {
-  cron.schedule(CRON_EXPR, runNightlyScoring, { timezone: TZ });
+  // A failed run is logged and retried on the next schedule; it must never take the API down.
+  const runSafely = () => runNightlyScoring().catch((err) => console.error('[Scoring Job] Run failed:', err.message));
+  cron.schedule(CRON_EXPR, runSafely, { timezone: TZ });
   console.log(`[Scoring Job] Scheduled: "${CRON_EXPR}" (${TZ})`);
 
   // Run after 8s delay on startup so DB is ready
-  setTimeout(runNightlyScoring, 8_000);
+  setTimeout(runSafely, 8_000);
 }
 
 module.exports = { runNightlyScoring };
