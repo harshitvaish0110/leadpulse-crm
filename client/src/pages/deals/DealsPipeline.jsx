@@ -11,13 +11,13 @@ import { getDeals, createDeal, moveDeal } from '../../api/deals';
 import { getContacts } from '../../api/contacts';
 import Button from '../../components/ui/Button';
 import SlideOver from '../../components/ui/SlideOver';
-import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import Skeleton from '../../components/ui/Skeleton';
 import Avatar from '../../components/ui/Avatar';
 import Badge from '../../components/ui/Badge';
 import EmptyState from '../../components/ui/EmptyState';
 import { WinProbabilityBar } from '../../components/crm/Indicators';
+import LostReasonDialog from '../../components/deals/LostReasonDialog';
 import { formatCurrency, formatDate, formatPercent, humanize } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
 import { useDirectory, usePipelineStages } from '../../hooks/queries/lookups';
@@ -26,7 +26,6 @@ import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
-const LOST_REASONS = ['Price too high', 'Chose competitor', 'No budget', 'No decision made', 'Feature gap', 'Poor timing'];
 const FILTER_DEFAULTS = { view: 'kanban', q: '', owner: '', min: '', max: '', from: '', to: '', sort: 'createdAt:desc', page: '1' };
 const control = 'text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white';
 const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
@@ -131,28 +130,6 @@ function moveInColumns(columns, dealId, toColumnId) {
     }
     return c;
   });
-}
-
-function LostReasonDialog({ pending, onCancel, onConfirm }) {
-  const [reason, setReason] = useState(LOST_REASONS[0]);
-  return (
-    <Modal isOpen={Boolean(pending)} onClose={onCancel} title="Why was this deal lost?" size="sm">
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(reason); }} className="space-y-4">
-        <fieldset className="space-y-2">
-          <legend className="sr-only">Lost reason</legend>
-          {LOST_REASONS.map(r => (
-            <label key={r} className="flex items-center gap-2 text-sm text-gray-700">
-              <input type="radio" name="lost-reason" value={r} checked={reason === r} onChange={() => setReason(r)} /> {r}
-            </label>
-          ))}
-        </fieldset>
-        <div className="flex gap-3">
-          <Button type="button" variant="secondary" className="flex-1" onClick={onCancel}>Cancel</Button>
-          <Button type="submit" className="flex-1">Mark as lost</Button>
-        </div>
-      </form>
-    </Modal>
-  );
 }
 
 function KanbanBoard({ filters, onAddDeal }) {
