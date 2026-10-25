@@ -1,135 +1,71 @@
 """
-Churn + Win-Probability prediction routes.
-Models are trained via train.py and loaded once at startup.
-Falls back to heuristic scoring if model files are not yet trained.
+Churn and win-probability predictions from named feature rows.
+
+POST /predict/churn     { rows: [{ id, <churn features> }] }  -> { predictions: [{ id, risk }], model_version, source }
+POST /predict/win_prob  { rows: [{ id, <win features> }] }    -> { predictions: [{ id, probability }], model_version, source }
+
+Each row must contain exactly `id` plus the model's features (models/metadata.json);
+anything else is a 422, so a schema drift between the API and the model is caught
+instead of silently mis-scored. Probabilities are 0–1.
 """
 
-from flask import Blueprint, request, jsonify
+import math
+
 import numpy as np
-import os
+from flask import Blueprint, jsonify, request
+
+from services import model_store
 
 predict_bp = Blueprint("predict", __name__)
 
-# ── Lazy model loading ────────────────────────────────────────────────────────
-_churn_model = None
-_churn_scaler = None
-_win_model = None
-_models_loaded = False
+MAX_ROWS = 1000
 
 
-def _load_models():
-    global _churn_model, _churn_scaler, _win_model, _models_loaded
-    if _models_loaded:
-        return
-    try:
-        import joblib
-        base = os.path.join(os.path.dirname(__file__), "..", "models")
-        churn_path  = os.path.join(base, "churn_model.pkl")
-        scaler_path = os.path.join(base, "churn_scaler.pkl")
-        win_path    = os.path.join(base, "win_prob_model.pkl")
-
-        if os.path.exists(churn_path) and os.path.exists(scaler_path):
-            _churn_model  = joblib.load(churn_path)
-            _churn_scaler = joblib.load(scaler_path)
-            print("[OK] Churn model loaded")
-        else:
-            print("[WARN] Churn model not found — run python train.py first. Using heuristic fallback.")
-
-        if os.path.exists(win_path):
-            _win_model = joblib.load(win_path)
-            print("[OK] Win probability model loaded")
-        else:
-            print("[WARN] Win probability model not found — using heuristic fallback.")
-
-    except ImportError:
-        print("[WARN] joblib/sklearn not available. Using heuristic fallback.")
-    finally:
-        _models_loaded = True
+def _validate(kind: str, rows):
+    if not isinstance(rows, list) or not rows:
+        return None, ("rows must be a non-empty list", 400)
+    if len(rows) > MAX_ROWS:
+        return None, (f"at most {MAX_ROWS} rows per request", 422)
+    expected = set(model_store.features(kind)) | {"id"}
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != expected:
+            got = sorted(row) if isinstance(row, dict) else type(row).__name__
+            return None, (f"row {i}: keys must be exactly {sorted(expected)}, got {got}", 422)
+        for key in expected - {"id"}:
+            value = row[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                return None, (f"row {i}: {key} must be a finite number", 422)
+    return rows, None
 
 
-def _heuristic_churn(features: list) -> float:
-    """
-    Heuristic churn risk when model not trained.
-    features: [days_since_last_contact, activity_last_30, activity_last_90,
-               sentiment_score, lead_score, deal_count, total_deal_value, has_open_deal]
-    """
-    days, act30, act90, sentiment, lead_score, deals, value, has_open = features
-    risk = 0.5
-    if days > 60:   risk += 0.2
-    if days > 30:   risk += 0.1
-    if act30 == 0:  risk += 0.15
-    if sentiment < 0.3: risk += 0.15
-    if has_open:    risk -= 0.2
-    if deals > 2:   risk -= 0.1
-    return round(max(0.0, min(1.0, risk)), 4)
+def _predict(kind: str, output_key: str):
+    rows, error = _validate(kind, (request.get_json(silent=True) or {}).get("rows"))
+    if error:
+        message, status = error
+        return jsonify({"error": message}), status
 
+    names = model_store.features(kind)
+    model = model_store.get(kind)
+    if model is not None:
+        matrix = np.array([[float(r[n]) for n in names] for r in rows], dtype=np.float64)
+        probs = model.predict_proba(matrix)[:, 1]
+        source = "model"
+    else:
+        probs = [model_store.heuristic(kind, r) for r in rows]
+        source = "heuristic"
 
-def _heuristic_win(features: list) -> float:
-    """
-    Heuristic win probability when model not trained.
-    features: [stage_num, value, days_in_stage, total_activities, activity_last_7, company_size]
-    """
-    stage_num, value, days_in_stage, total_act, act_7, company_size = features
-    # stage_num: 0=LEAD...4=NEGOTIATION, 5=WON/LOST
-    base = [0.05, 0.15, 0.30, 0.50, 0.70].get(int(stage_num), 0.50) if hasattr([0.05], 'get') else [0.05, 0.15, 0.30, 0.50, 0.70][min(int(stage_num), 4)]
-    if act_7 > 3:      base += 0.1
-    if days_in_stage > 30: base -= 0.1
-    return round(max(0.0, min(0.99, base)), 4)
+    return jsonify({
+        "predictions": [{"id": r["id"], output_key: round(float(min(1.0, max(0.0, p))), 4)} for r, p in zip(rows, probs)],
+        "model_version": model_store.version(kind) if model is not None else None,
+        "source": source,
+    })
 
 
 @predict_bp.route("/churn", methods=["POST"])
-def predict_churn():
-    """
-    POST /predict/churn
-    Body: { "features": [days_since_last_contact, activity_last_30, activity_last_90,
-                          sentiment_score, lead_score, deal_count, total_deal_value, has_open_deal] }
-    Returns: { "risk": 0.0-1.0 }
-    """
-    _load_models()
-    data = request.get_json(silent=True) or {}
-    raw_features = data.get("features", [])
-
-    if len(raw_features) != 8:
-        return jsonify({"error": "Expected 8 features"}), 400
-
-    if _churn_model is None or _churn_scaler is None:
-        return jsonify({
-            "risk": _heuristic_churn(raw_features),
-            "source": "heuristic",
-        })
-
-    try:
-        features = np.array(raw_features, dtype=float).reshape(1, -1)
-        scaled   = _churn_scaler.transform(features)
-        risk     = float(_churn_model.predict_proba(scaled)[0][1])
-        return jsonify({"risk": round(risk, 4), "source": "model"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+def churn():
+    return _predict("churn", "risk")
 
 
 @predict_bp.route("/win_prob", methods=["POST"])
-def predict_win():
-    """
-    POST /predict/win_prob
-    Body: { "features": [stage_num, value, days_in_stage, total_activities, activity_last_7, company_size] }
-    Returns: { "probability": 0.0-1.0 }
-    """
-    _load_models()
-    data = request.get_json(silent=True) or {}
-    raw_features = data.get("features", [])
-
-    if len(raw_features) != 6:
-        return jsonify({"error": "Expected 6 features"}), 400
-
-    if _win_model is None:
-        return jsonify({
-            "probability": _heuristic_win(raw_features),
-            "source": "heuristic",
-        })
-
-    try:
-        features    = np.array(raw_features, dtype=float).reshape(1, -1)
-        probability = float(_win_model.predict_proba(features)[0][1])
-        return jsonify({"probability": round(probability, 4), "source": "model"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+def win_probability():
+    return _predict("win", "probability")
