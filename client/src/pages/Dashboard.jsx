@@ -8,9 +8,10 @@ import {
   Mail, Calendar, MessageSquare, FileText, Activity, ArrowUpRight
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getRevenue, getPipeline, getWinLoss, getOverview } from '../api/analytics';
-import { getContacts } from '../api/contacts';
+import { getRevenue, getPipeline, getWinLoss, getOverview, getAtRisk } from '../api/analytics';
 import { getActivities } from '../api/activities';
+import { formatCurrency, formatDate, formatPercent, humanize } from '../lib/format';
+import { qk } from '../hooks/queries/keys';
 import Skeleton from '../components/ui/Skeleton';
 import Avatar from '../components/ui/Avatar';
 import Badge from '../components/ui/Badge';
@@ -55,12 +56,6 @@ function MetricCard({ icon: Icon, label, value, sub, color = 'indigo', loading }
   );
 }
 
-function formatCurrency(n) {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n}`;
-}
-
 const CustomAreaTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -74,39 +69,40 @@ const CustomAreaTooltip = ({ active, payload, label }) => {
 export default function Dashboard() {
   const navigate = useNavigate();
 
+  const recentParams = { limit: 15 };
   const { data: overviewData, isLoading: overviewLoading } = useQuery({
-    queryKey: ['analytics', 'overview'],
+    queryKey: qk.analytics.report('overview'),
     queryFn: () => getOverview().then(r => r.data),
   });
   const { data: revenueData, isLoading: revenueLoading } = useQuery({
-    queryKey: ['analytics', 'revenue'],
+    queryKey: qk.analytics.report('revenue'),
     queryFn: () => getRevenue().then(r => r.data),
   });
   const { data: pipelineData, isLoading: pipelineLoading } = useQuery({
-    queryKey: ['analytics', 'pipeline'],
+    queryKey: qk.analytics.report('pipeline'),
     queryFn: () => getPipeline().then(r => r.data),
   });
   const { data: winLossData } = useQuery({
-    queryKey: ['analytics', 'win-loss'],
+    queryKey: qk.analytics.report('win-loss'),
     queryFn: () => getWinLoss().then(r => r.data),
   });
   const { data: activitiesData, isLoading: activitiesLoading } = useQuery({
-    queryKey: ['activities', 'recent'],
-    queryFn: () => getActivities({ limit: 15 }).then(r => r.data),
+    queryKey: qk.activities.list(recentParams),
+    queryFn: () => getActivities(recentParams).then(r => r.data),
   });
   const { data: atRiskData, isLoading: atRiskLoading } = useQuery({
-    queryKey: ['contacts', 'at-risk'],
-    queryFn: () => getContacts({ limit: 5, churnRisk: 'high' }).then(r => r.data),
+    queryKey: qk.analytics.report('at-risk', { limit: 5 }),
+    queryFn: () => getAtRisk({ limit: 5 }).then(r => r.data),
   });
 
   const stats = overviewData?.stats || {};
   const chartData = (revenueData?.historical || []).map(m => ({
-    month: new Date(m.ds).toLocaleString('default', { month: 'short' }),
+    month: formatDate(m.ds, { dateOnly: true, day: undefined, year: undefined }),
     revenue: m.y,
   }));
   const pipelineChartData = (pipelineData?.stages || [])
     .filter(s => !['CLOSED_WON', 'CLOSED_LOST'].includes(s.stage))
-    .map(s => ({ name: s.stage, count: s.count, value: s.totalValue }));
+    .map(s => ({ stage: s.stage, name: humanize(s.stage), count: s.count, value: s.totalValue }));
 
   return (
     <div className="space-y-6">
@@ -133,7 +129,7 @@ export default function Dashboard() {
         />
         <MetricCard
           icon={Target} label="Win Rate" color="amber"
-          value={winLossData ? `${winLossData.winRate}%` : '–'}
+          value={winLossData ? formatPercent(winLossData.winRate) : '–'}
           sub={`${winLossData?.won ?? 0} won / ${winLossData?.lost ?? 0} lost`}
           loading={!winLossData}
         />
@@ -191,7 +187,7 @@ export default function Dashboard() {
                 <Tooltip formatter={(v) => [v, 'Deals']} />
                 <Bar dataKey="count" radius={[0, 4, 4, 0]}>
                   {pipelineChartData.map((entry, i) => (
-                    <Cell key={i} fill={STAGE_COLORS[entry.name] || '#6366f1'} />
+                    <Cell key={i} fill={STAGE_COLORS[entry.stage] || '#6366f1'} />
                   ))}
                 </Bar>
               </BarChart>
@@ -205,7 +201,8 @@ export default function Dashboard() {
 
         {/* At-Risk Contacts */}
         <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">At-Risk Contacts</h2>
+          <h2 className="text-base font-semibold text-gray-900 mb-1">At-Risk Contacts</h2>
+          <p className="text-sm text-gray-400 mb-4">Churn risk above 60% or sentiment below 0.3</p>
           {atRiskLoading ? (
             <Skeleton lines={5} />
           ) : atRiskData?.contacts?.length === 0 ? (
@@ -215,7 +212,7 @@ export default function Dashboard() {
               {(atRiskData?.contacts || []).map(c => {
                 const risk = c.churnRisk ?? 0;
                 const riskColor = risk > 0.6 ? 'red' : risk > 0.3 ? 'amber' : 'green';
-                const riskPct = `${(risk * 100).toFixed(0)}%`;
+                const riskPct = formatPercent(risk);
                 return (
                   <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors"
                     onClick={() => navigate(`/contacts/${c.id}`)}>
@@ -242,7 +239,7 @@ export default function Dashboard() {
             <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
               {(activitiesData?.activities || []).map((a) => {
                 const Icon = ACTIVITY_ICONS[a.type] || Activity;
-                const timeAgo = new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const timeAgo = formatDate(a.occurredAt, { year: undefined });
                 return (
                   <div key={a.id} className="flex gap-3 py-2.5 border-b border-gray-50 last:border-0">
                     <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">

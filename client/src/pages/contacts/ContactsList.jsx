@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Upload, Download, Search, Trash2, Edit2 } from 'lucide-react';
 import { getContacts, createContact, deleteContact, exportContacts, importContacts } from '../../api/contacts';
@@ -12,9 +12,12 @@ import Badge from '../../components/ui/Badge';
 import Avatar from '../../components/ui/Avatar';
 import Skeleton from '../../components/ui/Skeleton';
 import EmptyState from '../../components/ui/EmptyState';
+import { CONTACT_STATUSES } from '../../constants/crm';
+import { formatPercent, humanize } from '../../lib/format';
+import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
 
-const LEAD_SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue', NEW: 'gray' };
+const LEAD_SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue' };
 
 function churnColor(risk) {
   if (risk > 0.6) return 'text-red-600';
@@ -25,8 +28,8 @@ function churnColor(risk) {
 function ContactForm({ onSuccess, onClose }) {
   const qc = useQueryClient();
   const { data: companiesData } = useQuery({
-    queryKey: ['companies', 'all'],
-    queryFn: () => getCompanies({ limit: 100 }).then(r => r.data),
+    queryKey: qk.companies.options,
+    queryFn: () => getCompanies({ limit: 100, sortBy: 'name', sortDir: 'asc' }).then(r => r.data),
   });
 
   const [form, setForm] = useState({
@@ -37,11 +40,11 @@ function ContactForm({ onSuccess, onClose }) {
   const { mutate, isPending } = useMutation({
     mutationFn: createContact,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['contacts'] });
+      qc.invalidateQueries({ queryKey: qk.contacts.all });
       toast.success('Contact created');
       onSuccess?.();
     },
-    onError: (err) => toast.error(err.response?.data?.error || 'Failed to create contact'),
+    onError: (err) => toast.error(err.response?.data?.details?.[0]?.msg || err.response?.data?.error || 'Failed to create contact'),
   });
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
@@ -52,7 +55,7 @@ function ContactForm({ onSuccess, onClose }) {
         <Input label="First name" required value={form.firstName} onChange={e => set('firstName', e.target.value)} className="w-1/2" />
         <Input label="Last name" required value={form.lastName} onChange={e => set('lastName', e.target.value)} className="w-1/2" />
       </div>
-      <Input label="Email" type="email" value={form.email} onChange={e => set('email', e.target.value)} />
+      <Input label="Email" type="email" required value={form.email} onChange={e => set('email', e.target.value)} />
       <Input label="Phone" type="tel" value={form.phone} onChange={e => set('phone', e.target.value)} />
       <Input label="Job title" value={form.title} onChange={e => set('title', e.target.value)} />
       <div>
@@ -71,7 +74,7 @@ function ContactForm({ onSuccess, onClose }) {
         <select
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           value={form.status} onChange={e => set('status', e.target.value)}>
-          {['LEAD','PROSPECT','CUSTOMER','CHURNED'].map(s => <option key={s} value={s}>{s}</option>)}
+          {CONTACT_STATUSES.map(s => <option key={s} value={s}>{humanize(s)}</option>)}
         </select>
       </div>
       <div className="flex gap-3 pt-2">
@@ -103,16 +106,17 @@ export default function ContactsList() {
     setSearchTimer(setTimeout(() => { setSearch(v); setPage(1); }, 300));
   };
 
+  const listParams = { search, status: statusFilter || undefined, page, limit: 25 };
   const { data, isLoading } = useQuery({
-    queryKey: ['contacts', { search, status: statusFilter, page }],
-    queryFn: () => getContacts({ search, status: statusFilter || undefined, page, limit: 25 }).then(r => r.data),
-    keepPreviousData: true,
+    queryKey: qk.contacts.list(listParams),
+    queryFn: () => getContacts(listParams).then(r => r.data),
+    placeholderData: keepPreviousData,
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteContact,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['contacts'] });
+      qc.invalidateQueries({ queryKey: qk.contacts.all });
       toast.success('Contact deleted');
     },
     onError: () => toast.error('Failed to delete contact'),
@@ -134,8 +138,9 @@ export default function ContactsList() {
     setImportLoading(true);
     try {
       const { data: res } = await importContacts(importFile);
-      toast.success(`Imported ${res.created} contacts`);
-      qc.invalidateQueries({ queryKey: ['contacts'] });
+      const failed = res.failed?.length ?? 0;
+      toast.success(`Imported ${res.created} new, updated ${res.updated ?? 0}${failed ? `, ${failed} failed` : ''}`);
+      qc.invalidateQueries({ queryKey: qk.contacts.all });
       setShowImport(false); setImportFile(null);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Import failed');
@@ -211,7 +216,7 @@ export default function ContactsList() {
           className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
           <option value="">All statuses</option>
-          {['LEAD','PROSPECT','CUSTOMER','CHURNED'].map(s => <option key={s} value={s}>{s}</option>)}
+          {CONTACT_STATUSES.map(s => <option key={s} value={s}>{humanize(s)}</option>)}
         </select>
       </div>
 
@@ -262,13 +267,13 @@ export default function ContactsList() {
                   <td className="px-4 py-3 text-sm text-gray-600">{c.company?.name || '—'}</td>
                   <td className="px-4 py-3 text-sm text-gray-500">{c.email || '—'}</td>
                   <td className="px-4 py-3">
-                    {c.leadScore ? (
-                      <Badge variant={LEAD_SCORE_VARIANT[c.leadScore] || 'gray'}>{c.leadScore}</Badge>
+                    {c.leadScoreLabel ? (
+                      <Badge variant={LEAD_SCORE_VARIANT[c.leadScoreLabel] || 'gray'}>{c.leadScoreLabel} · {c.leadScore}</Badge>
                     ) : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`text-sm font-medium ${churnColor(c.churnRisk ?? 0)}`}>
-                      {c.churnRisk != null ? `${(c.churnRisk * 100).toFixed(0)}%` : '—'}
+                      {c.churnRisk != null ? formatPercent(c.churnRisk) : '—'}
                     </span>
                   </td>
                   <td className="px-4 py-3">

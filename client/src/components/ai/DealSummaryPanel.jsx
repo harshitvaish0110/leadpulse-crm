@@ -1,80 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Brain, RefreshCw, AlertCircle } from 'lucide-react';
 import Button from '../ui/Button';
-import { authFetch } from '../../api/axiosInstance';
+import { streamSSE } from '../../lib/sse';
+import { Markdown } from '../../lib/markdown';
 import toast from 'react-hot-toast';
 
-/** Minimal markdown renderer — converts ## headings + **bold** to HTML */
-function renderMarkdown(md) {
-  if (!md) return '';
-  return md
-    .replace(/^## (.+)$/gm, '<h3 class="text-sm font-semibold text-gray-800 mt-3 mb-1">$1</h3>')
-    .replace(/^### (.+)$/gm, '<h4 class="text-xs font-semibold text-gray-700 mt-2 mb-0.5">$1</h4>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^- (.+)$/gm, '<li class="text-sm text-gray-600 ml-3 list-disc">$1</li>')
-    .replace(/\n\n/g, '<div class="mb-2" />')
-    .replace(/\n/g, '<br/>');
-}
-
 export default function DealSummaryPanel({ dealId }) {
-  const [summary, setSummary]   = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [summary, setSummary]     = useState('');
+  const [loading, setLoading]     = useState(false);
   const [generated, setGenerated] = useState(false);
-  const [error, setError]       = useState(null);
+  const [error, setError]         = useState(null);
+  const abortRef = useRef(null);
+
+  // Stop an in-flight stream when leaving the page.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const generate = async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setSummary('');
     setLoading(true);
     setGenerated(false);
     setError(null);
 
+    let text = '';
+    let failure = null;
     try {
-      const response = await authFetch(`/api/ai/deal-summary/${dealId}`, {
-        method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ dealId }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Summary generation failed');
-      }
-
-      const reader  = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullText  = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-
-        for (const line of lines) {
-          const raw = line.slice(6).trim();
-          if (raw === '[DONE]') break;
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed.text) {
-              fullText += parsed.text;
-              setSummary(fullText);
-            } else if (parsed.summary) {
-              // Non-streaming JSON response (fallback)
-              setSummary(parsed.summary);
-            }
-          } catch { /* ignore partial or non-JSON SSE line */ }
-        }
-      }
+      await streamSSE(`/api/ai/deal-summary/${dealId}`, {}, {
+        delta: ({ text: chunk }) => { text += chunk; setSummary(text); },
+        error: ({ message }) => { failure = message; },
+      }, { signal: controller.signal });
+      if (failure) throw new Error(failure);
       setGenerated(true);
     } catch (err) {
+      if (err.name === 'AbortError') return;
       const msg = err.message || 'AI service unavailable';
       setError(msg);
       toast.error(msg);
     } finally {
-      setLoading(false);
+      if (abortRef.current === controller) setLoading(false);
     }
   };
 
@@ -87,11 +53,11 @@ export default function DealSummaryPanel({ dealId }) {
           </div>
           <div>
             <p className="text-sm font-semibold text-white">AI Deal Briefing</p>
-            <p className="text-xs text-slate-400">Powered by Claude</p>
+            <p className="text-xs text-slate-400">Generated from this deal's recent activity</p>
           </div>
         </div>
         {generated && (
-          <button onClick={generate} disabled={loading}
+          <button onClick={generate} disabled={loading} aria-label="Regenerate briefing"
             className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -129,10 +95,7 @@ export default function DealSummaryPanel({ dealId }) {
 
       {/* Summary — streams in live */}
       {summary && (
-        <div
-          className="prose prose-sm prose-invert max-w-none text-slate-300 text-sm leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(summary) }}
-        />
+        <Markdown text={summary} className="prose prose-sm prose-invert max-w-none text-slate-300 text-sm leading-relaxed" />
       )}
 
       {/* Regenerate button after first generation */}

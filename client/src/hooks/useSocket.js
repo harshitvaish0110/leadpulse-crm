@@ -11,6 +11,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore, getAccessToken } from '../store/authStore';
 import { useUIStore } from '../store/uiStore';
 import { refreshSession } from '../api/axiosInstance';
+import { qk } from './queries/keys';
+import { formatPercent, humanize } from '../lib/format';
 
 // Empty = same origin (the Vite dev proxy forwards /socket.io).
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || undefined;
@@ -40,52 +42,51 @@ export function useSocket() {
       refreshSession().then(() => socket.connect()).catch(() => {});
     });
 
+    const refresh = (...keys) => keys.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
+
     // ── Deal events ─────────────────────────────────────────────────────────
     socket.on('deal:stage_changed', (data) => {
-      queryClient.invalidateQueries({ queryKey: ['deals'] });
-      queryClient.invalidateQueries({ queryKey: ['deal', data.dealId] });
+      refresh(qk.deals.all, qk.analytics.all);
       addNotification({
         type:    'deal',
         title:   'Deal Stage Updated',
-        message: `"${data.title}" moved to ${data.toStage.replace(/_/g, ' ')}`,
+        message: `"${data.title}" moved to ${humanize(data.toStage)}`,
         dealId:  data.dealId,
       });
     });
-
-    socket.on('deal:score_updated', () => {
-      queryClient.invalidateQueries({ queryKey: ['deals'] });
+    ['deal:created', 'deal:updated', 'deal:deleted', 'deal:score_updated'].forEach((event) => {
+      socket.on(event, () => refresh(qk.deals.all, qk.analytics.all));
     });
 
     // ── Activity events ─────────────────────────────────────────────────────
-    socket.on('activity:created', (data) => {
-      queryClient.invalidateQueries({ queryKey: ['activities'] });
-      if (data?.contactId) {
-        queryClient.invalidateQueries({ queryKey: ['activities', data.contactId] });
-      }
+    ['activity:created', 'activity:deleted'].forEach((event) => {
+      socket.on(event, () => refresh(qk.activities.all, qk.contacts.all));
     });
 
     // ── Contact events ──────────────────────────────────────────────────────
-    socket.on('contact:updated', () => {
-      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+    ['contact:created', 'contact:updated', 'contact:deleted'].forEach((event) => {
+      socket.on(event, () => refresh(qk.contacts.all, qk.analytics.all));
     });
 
     socket.on('contact:churn_alert', (data) => {
+      refresh(qk.analytics.all);
       addNotification({
         type:    'alert',
-        title:   '⚠️ Churn Alert',
-        message: `${data.name} has ${Math.round(data.churnRisk * 100)}% churn risk`,
+        title:   'Churn Alert',
+        message: `${data.name} has ${formatPercent(data.churnRisk)} churn risk`,
         contactId: data.contactId,
       });
     });
 
     // ── Task events ─────────────────────────────────────────────────────────
+    socket.on('task:assigned', (data) => {
+      refresh(qk.tasks.all);
+      addNotification({ type: 'task', title: 'New Task Assigned', message: data.title, taskId: data.taskId });
+    });
+
     socket.on('task:due_soon', (data) => {
-      addNotification({
-        type:    'task',
-        title:   'Task Due Soon',
-        message: data.title,
-        taskId:  data.taskId,
-      });
+      refresh(qk.tasks.all);
+      addNotification({ type: 'task', title: 'Task Due Soon', message: data.title, taskId: data.taskId });
     });
 
     return () => {

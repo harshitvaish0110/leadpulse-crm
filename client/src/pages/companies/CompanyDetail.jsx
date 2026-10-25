@@ -16,6 +16,8 @@ import Skeleton from '../../components/ui/Skeleton';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import EmptyState from '../../components/ui/EmptyState';
+import { formatCurrency, formatDate, formatPercent, humanize, probabilityColor, toPercent } from '../../lib/format';
+import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
 
 const STAGE_VARIANT = {
@@ -24,11 +26,31 @@ const STAGE_VARIANT = {
   CLOSED_WON: 'green', CLOSED_LOST: 'red',
 };
 
-function formatCurrency(n) {
-  if (!n) return '$0';
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n}`;
+const SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue' };
+const EDITABLE_FIELDS = ['name', 'domain', 'industry', 'website', 'description'];
+
+function EditCompanyForm({ company, onCancel, onSave, saving }) {
+  const [form, setForm] = useState(() => Object.fromEntries(EDITABLE_FIELDS.map(f => [f, company[f] ?? ''])));
+  const set = (field) => (e) => setForm(p => ({ ...p, [field]: e.target.value }));
+  return (
+    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <Input label="Company name" required value={form.name} onChange={set('name')} />
+        <Input label="Domain" required value={form.domain} onChange={set('domain')} />
+        <Input label="Industry" value={form.industry} onChange={set('industry')} />
+        <Input label="Website" value={form.website} onChange={set('website')} />
+      </div>
+      <div>
+        <label htmlFor="company-description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+        <textarea id="company-description" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+          rows={3} value={form.description} onChange={set('description')} />
+      </div>
+      <div className="flex gap-3">
+        <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">Cancel</Button>
+        <Button type="submit" loading={saving} className="flex-1">Save Changes</Button>
+      </div>
+    </form>
+  );
 }
 
 export default function CompanyDetail() {
@@ -37,47 +59,52 @@ export default function CompanyDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState('contacts');
   const [editing, setEditing] = useState(false);
-  const [editForm, setEditForm] = useState(null);
+
+  const contactParams = { companyId: id, limit: 50 };
+  const dealParams = { companyId: id, view: 'list', limit: 50 };
+  const activityParams = { companyId: id, limit: 30 };
 
   const { data: companyData, isLoading } = useQuery({
-    queryKey: ['company', id],
+    queryKey: qk.companies.detail(id),
     queryFn: () => getCompany(id).then(r => r.data),
-    onSuccess: (d) => !editForm && setEditForm(d.company),
   });
 
   const { data: contactsData } = useQuery({
-    queryKey: ['company-contacts', id],
-    queryFn: () => getContacts({ companyId: id, limit: 50 }).then(r => r.data),
+    queryKey: qk.contacts.list(contactParams),
+    queryFn: () => getContacts(contactParams).then(r => r.data),
     enabled: tab === 'contacts',
   });
 
   const { data: dealsData } = useQuery({
-    queryKey: ['company-deals', id],
-    queryFn: () => getDeals({ companyId: id, limit: 50 }).then(r => r.data),
+    queryKey: qk.deals.list(dealParams),
+    queryFn: () => getDeals(dealParams).then(r => r.data),
     enabled: tab === 'deals',
   });
 
   const { data: activitiesData } = useQuery({
-    queryKey: ['company-activities', id],
-    queryFn: () => getActivities({ companyId: id, limit: 30 }).then(r => r.data),
+    queryKey: qk.activities.list(activityParams),
+    queryFn: () => getActivities(activityParams).then(r => r.data),
     enabled: tab === 'activities',
   });
 
   const updateMutation = useMutation({
     mutationFn: (data) => updateCompany(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['company', id] });
-      qc.invalidateQueries({ queryKey: ['companies'] });
+      qc.invalidateQueries({ queryKey: qk.companies.all });
       toast.success('Company updated');
       setEditing(false);
     },
-    onError: () => toast.error('Update failed'),
+    onError: (err) => toast.error(err.response?.data?.error || 'Update failed'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteCompany(id),
-    onSuccess: () => { toast.success('Company deleted'); navigate('/companies'); },
-    onError: () => toast.error('Delete failed'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.companies.all });
+      toast.success('Company deleted');
+      navigate('/companies');
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Delete failed'),
   });
 
   if (isLoading) {
@@ -150,9 +177,9 @@ export default function CompanyDetail() {
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4 mt-6 pt-5 border-t border-gray-100">
           {[
-            { label: 'Contacts', value: company._count?.contacts ?? 0, icon: Users },
-            { label: 'Deals', value: company._count?.deals ?? 0, icon: TrendingUp },
-            { label: 'Activities', value: company._count?.activities ?? 0, icon: Activity },
+            { label: 'Contacts', value: company.stats?.contacts ?? 0, icon: Users },
+            { label: 'Deals', value: company.stats?.deals ?? 0, icon: TrendingUp },
+            { label: 'Activities', value: company.stats?.activities ?? 0, icon: Activity },
           ].map(({ label, value, icon: Icon }) => (
             <div key={label} className="text-center">
               <Icon size={16} className="mx-auto mb-1 text-gray-400" />
@@ -199,9 +226,9 @@ export default function CompanyDetail() {
                     <td className="px-5 py-3 text-sm text-gray-500">{c.title || '—'}</td>
                     <td className="px-5 py-3 text-sm text-gray-500">{c.email || '—'}</td>
                     <td className="px-5 py-3">
-                      {c.leadScore ? <Badge variant={c.leadScore === 'HOT' ? 'red' : c.leadScore === 'WARM' ? 'amber' : 'blue'}>{c.leadScore}</Badge> : '—'}
+                      {c.leadScoreLabel ? <Badge variant={SCORE_VARIANT[c.leadScoreLabel]}>{c.leadScoreLabel} · {c.leadScore}</Badge> : '—'}
                     </td>
-                    <td className="px-5 py-3"><Badge variant="gray">{c.status}</Badge></td>
+                    <td className="px-5 py-3"><Badge variant="gray">{humanize(c.status)}</Badge></td>
                   </tr>
                 ))}
               </tbody>
@@ -222,14 +249,14 @@ export default function CompanyDetail() {
               onClick={() => navigate(`/deals/${d.id}`)}>
               <div className="flex items-start justify-between mb-3">
                 <p className="font-semibold text-gray-900">{d.title}</p>
-                <Badge variant={STAGE_VARIANT[d.stage] || 'gray'}>{d.stage.replace('_', ' ')}</Badge>
+                <Badge variant={STAGE_VARIANT[d.stage] || 'gray'}>{humanize(d.stage)}</Badge>
               </div>
               <p className="text-xl font-bold text-indigo-600 mb-2">{formatCurrency(d.value)}</p>
               <div className="w-full h-1.5 bg-gray-100 rounded-full">
-                <div className={`h-1.5 rounded-full transition-all ${(d.winProbability || 0) > 60 ? 'bg-green-500' : (d.winProbability || 0) > 30 ? 'bg-amber-500' : 'bg-red-400'}`}
-                  style={{ width: `${d.winProbability || 0}%` }} />
+                <div className={`h-1.5 rounded-full transition-all ${probabilityColor(d.winProbability)}`}
+                  style={{ width: `${toPercent(d.winProbability)}%` }} />
               </div>
-              <p className="text-xs text-gray-400 mt-1">{d.winProbability || 0}% win probability</p>
+              <p className="text-xs text-gray-400 mt-1">{formatPercent(d.winProbability)} win probability</p>
             </div>
           ))}
         </div>
@@ -250,7 +277,7 @@ export default function CompanyDetail() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-0.5">
                       <p className="text-sm font-medium text-gray-900">{a.subject || a.type}</p>
-                      <Badge variant="gray">{a.type}</Badge>
+                      <Badge variant="gray">{humanize(a.type)}</Badge>
                     </div>
                     {a.contact && (
                       <p className="text-xs text-gray-500 cursor-pointer hover:text-indigo-600"
@@ -260,7 +287,7 @@ export default function CompanyDetail() {
                     )}
                     {a.notes && <p className="text-sm text-gray-500 mt-1 line-clamp-2">{a.notes}</p>}
                     <p className="text-xs text-gray-400 mt-1">
-                      {new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      {formatDate(a.occurredAt)}
                     </p>
                   </div>
                 </div>
@@ -271,27 +298,15 @@ export default function CompanyDetail() {
       )}
 
       {/* Edit Modal */}
-      {editForm && (
-        <Modal isOpen={editing} onClose={() => setEditing(false)} title="Edit Company" size="lg">
-          <form onSubmit={e => { e.preventDefault(); updateMutation.mutate(editForm); }} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <Input label="Company name" required value={editForm.name || ''} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} />
-              <Input label="Domain" value={editForm.domain || ''} onChange={e => setEditForm(p => ({ ...p, domain: e.target.value }))} />
-              <Input label="Industry" value={editForm.industry || ''} onChange={e => setEditForm(p => ({ ...p, industry: e.target.value }))} />
-              <Input label="Website" value={editForm.website || ''} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-                rows={3} value={editForm.description || ''} onChange={e => setEditForm(p => ({ ...p, description: e.target.value }))} />
-            </div>
-            <div className="flex gap-3">
-              <Button type="button" variant="secondary" onClick={() => setEditing(false)} className="flex-1">Cancel</Button>
-              <Button type="submit" loading={updateMutation.isPending} className="flex-1">Save Changes</Button>
-            </div>
-          </form>
-        </Modal>
-      )}
+      <Modal isOpen={editing} onClose={() => setEditing(false)} title="Edit Company" size="lg">
+        <EditCompanyForm
+          key={`${company.id}-${company.updatedAt}`}
+          company={company}
+          saving={updateMutation.isPending}
+          onCancel={() => setEditing(false)}
+          onSave={(data) => updateMutation.mutate(data)}
+        />
+      </Modal>
     </div>
   );
 }

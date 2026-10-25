@@ -16,9 +16,13 @@ import Input from '../../components/ui/Input';
 import Skeleton from '../../components/ui/Skeleton';
 import NextActionCard from '../../components/ai/NextActionCard';
 import EmailComposer from '../../components/ai/EmailComposer';
+import { CONTACT_STATUSES, LOGGABLE_ACTIVITY_TYPES } from '../../constants/crm';
+import { formatDate, formatPercent, humanize } from '../../lib/format';
+import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
 
-const LEAD_SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue', NEW: 'gray' };
+const LEAD_SCORE_VARIANT = { HOT: 'red', WARM: 'amber', COLD: 'blue' };
+const EDITABLE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'title', 'status'];
 const ACTIVITY_ICONS = { CALL: PhoneCall, EMAIL: Mail, MEETING: Calendar, NOTE: FileText, TRANSCRIPT: MessageSquare };
 
 function InfoRow({ icon: Icon, label, value }) {
@@ -40,11 +44,11 @@ function AddActivityModal({ contactId, onClose }) {
   const { mutate, isPending } = useMutation({
     mutationFn: createActivity,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['activities', contactId] });
+      qc.invalidateQueries({ queryKey: qk.activities.all });
       toast.success('Activity logged');
       onClose();
     },
-    onError: () => toast.error('Failed to log activity'),
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to log activity'),
   });
   return (
     <form onSubmit={e => { e.preventDefault(); mutate({ ...form, contactId }); }} className="space-y-4">
@@ -52,7 +56,7 @@ function AddActivityModal({ contactId, onClose }) {
         <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
         <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}>
-          {['CALL','EMAIL','MEETING','NOTE'].map(t => <option key={t} value={t}>{t}</option>)}
+          {LOGGABLE_ACTIVITY_TYPES.map(t => <option key={t} value={t}>{humanize(t)}</option>)}
         </select>
       </div>
       <Input label="Subject" value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
@@ -69,41 +73,71 @@ function AddActivityModal({ contactId, onClose }) {
   );
 }
 
+function EditContactForm({ contact, onCancel, onSave, saving }) {
+  const [form, setForm] = useState(() => Object.fromEntries(EDITABLE_FIELDS.map(f => [f, contact[f] ?? ''])));
+  const set = (field) => (e) => setForm(p => ({ ...p, [field]: e.target.value }));
+  return (
+    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <Input label="First name" required value={form.firstName} onChange={set('firstName')} />
+        <Input label="Last name" required value={form.lastName} onChange={set('lastName')} />
+        <Input label="Email" type="email" required value={form.email} onChange={set('email')} />
+        <Input label="Phone" type="tel" value={form.phone} onChange={set('phone')} />
+        <Input label="Title" value={form.title} onChange={set('title')} />
+        <div>
+          <label htmlFor="contact-status" className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+          <select id="contact-status" value={form.status} onChange={set('status')}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            {CONTACT_STATUSES.map(st => <option key={st} value={st}>{humanize(st)}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="flex gap-3">
+        <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">Cancel</Button>
+        <Button type="submit" loading={saving} className="flex-1">Save Changes</Button>
+      </div>
+    </form>
+  );
+}
+
 export default function ContactDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [showActivity, setShowActivity] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editForm, setEditForm] = useState(null);
   const [activeTab, setActiveTab] = useState('timeline'); // 'timeline' | 'ai'
 
+  const activityParams = { contactId: id, limit: 20 };
+  const taskParams = { contactId: id, completed: 'false' };
   const { data: contactData, isLoading } = useQuery({
-    queryKey: ['contact', id],
+    queryKey: qk.contacts.detail(id),
     queryFn: () => getContact(id).then(r => r.data),
-    onSuccess: (d) => !editForm && setEditForm(d.contact),
   });
   const { data: activitiesData } = useQuery({
-    queryKey: ['activities', id],
-    queryFn: () => getActivities({ contactId: id, limit: 20 }).then(r => r.data),
+    queryKey: qk.activities.list(activityParams),
+    queryFn: () => getActivities(activityParams).then(r => r.data),
   });
   const { data: tasksData } = useQuery({
-    queryKey: ['tasks', id],
-    queryFn: () => getTasks({ contactId: id, completed: 'false' }).then(r => r.data),
+    queryKey: qk.tasks.list(taskParams),
+    queryFn: () => getTasks(taskParams).then(r => r.data),
   });
 
   const updateMutation = useMutation({
     mutationFn: (data) => updateContact(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['contact', id] });
-      qc.invalidateQueries({ queryKey: ['contacts'] });
+      qc.invalidateQueries({ queryKey: qk.contacts.all });
       toast.success('Contact updated'); setEditing(false);
     },
-    onError: () => toast.error('Update failed'),
+    onError: (err) => toast.error(err.response?.data?.details?.[0]?.msg || err.response?.data?.error || 'Update failed'),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteContact(id),
-    onSuccess: () => { toast.success('Contact deleted'); navigate('/contacts'); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.contacts.all });
+      toast.success('Contact deleted');
+      navigate('/contacts');
+    },
     onError: () => toast.error('Delete failed'),
   });
 
@@ -138,9 +172,13 @@ export default function ContactDetail() {
               <h1 className="text-2xl font-bold text-gray-900">{contact.firstName} {contact.lastName}</h1>
               <p className="text-sm text-gray-500">{contact.title}{contact.company ? ` at ${contact.company.name}` : ''}</p>
               <div className="flex items-center gap-2 mt-2">
-                {contact.leadScore && <Badge variant={LEAD_SCORE_VARIANT[contact.leadScore]}>{contact.leadScore}</Badge>}
-                <Badge variant={riskColor}>{(risk * 100).toFixed(0)}% churn risk</Badge>
-                <Badge variant="gray">{contact.status}</Badge>
+                {contact.leadScoreLabel && (
+                  <Badge variant={LEAD_SCORE_VARIANT[contact.leadScoreLabel]}>
+                    {contact.leadScoreLabel} · {contact.leadScore}
+                  </Badge>
+                )}
+                <Badge variant={riskColor}>{formatPercent(risk)} churn risk</Badge>
+                <Badge variant="gray">{humanize(contact.status)}</Badge>
               </div>
             </div>
           </div>
@@ -165,7 +203,7 @@ export default function ContactDetail() {
             <InfoRow icon={Mail} label="Email" value={contact.email} />
             <InfoRow icon={Phone} label="Phone" value={contact.phone} />
             <InfoRow icon={Building2} label="Company" value={contact.company?.name} />
-            <InfoRow icon={Calendar} label="Member since" value={new Date(contact.createdAt).toLocaleDateString()} />
+            <InfoRow icon={Calendar} label="Member since" value={formatDate(contact.createdAt)} />
             {contact.sentimentScore != null && (
               <InfoRow icon={TrendingUp} label="Avg Sentiment" value={`${contact.sentimentScore.toFixed(2)} / 1.0`} />
             )}
@@ -195,7 +233,7 @@ export default function ContactDetail() {
                     <div className={`w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 ${t.priority === 'HIGH' ? 'bg-red-500' : t.priority === 'MEDIUM' ? 'bg-amber-500' : 'bg-gray-300'}`} />
                     <div>
                       <p className="text-sm text-gray-700">{t.title}</p>
-                      {t.dueDate && <p className="text-xs text-gray-400">{new Date(t.dueDate).toLocaleDateString()}</p>}
+                      {t.dueDate && <p className="text-xs text-gray-400">{formatDate(t.dueDate)}</p>}
                     </div>
                   </div>
                 ))}
@@ -248,7 +286,7 @@ export default function ContactDetail() {
                                 <span className={`text-xs ${sentimentColor}`}>{a.sentiment.toLowerCase()}</span>
                               )}
                               <span className="text-xs text-gray-400 ml-auto">
-                                {new Date(a.occurredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                {formatDate(a.occurredAt, { year: undefined })}
                               </span>
                             </div>
                             {a.notes && <p className="text-sm text-gray-500">{a.notes}</p>}
@@ -286,23 +324,15 @@ export default function ContactDetail() {
       </Modal>
 
       {/* Edit Modal */}
-      {editForm && (
-        <Modal isOpen={editing} onClose={() => setEditing(false)} title="Edit Contact" size="lg">
-          <form onSubmit={e => { e.preventDefault(); updateMutation.mutate(editForm); }} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <Input label="First name" value={editForm.firstName || ''} onChange={e => setEditForm(p => ({ ...p, firstName: e.target.value }))} />
-              <Input label="Last name" value={editForm.lastName || ''} onChange={e => setEditForm(p => ({ ...p, lastName: e.target.value }))} />
-              <Input label="Email" type="email" value={editForm.email || ''} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))} />
-              <Input label="Phone" type="tel" value={editForm.phone || ''} onChange={e => setEditForm(p => ({ ...p, phone: e.target.value }))} />
-              <Input label="Title" value={editForm.title || ''} onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))} />
-            </div>
-            <div className="flex gap-3">
-              <Button type="button" variant="secondary" onClick={() => setEditing(false)} className="flex-1">Cancel</Button>
-              <Button type="submit" loading={updateMutation.isPending} className="flex-1">Save Changes</Button>
-            </div>
-          </form>
-        </Modal>
-      )}
+      <Modal isOpen={editing} onClose={() => setEditing(false)} title="Edit Contact" size="lg">
+        <EditContactForm
+          key={`${contact.id}-${contact.updatedAt}`}
+          contact={contact}
+          saving={updateMutation.isPending}
+          onCancel={() => setEditing(false)}
+          onSave={(data) => updateMutation.mutate(data)}
+        />
+      </Modal>
     </div>
   );
 }

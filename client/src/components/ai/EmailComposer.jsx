@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Wand2, Copy, RefreshCw, CheckCircle2 } from 'lucide-react';
 import Button from '../ui/Button';
-import { authFetch } from '../../api/axiosInstance';
+import api from '../../api/axiosInstance';
 import toast from 'react-hot-toast';
 
 export default function EmailComposer({ contactId, dealId, onEmailReady }) {
@@ -21,56 +21,11 @@ export default function EmailComposer({ contactId, dealId, onEmailReady }) {
     setCopied(false);
 
     try {
-      const response = await authFetch(`/api/ai/compose-email`, {
-        method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ contactId, dealId, bulletPoints: bulletList }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Generation failed');
-      }
-
-      const reader  = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullText  = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-
-        for (const line of lines) {
-          const raw = line.slice(6).trim();
-          if (raw === '[DONE]') break;
-          try {
-            const { text } = JSON.parse(raw);
-            fullText += text;
-
-            // Parse subject from first line starting with "Subject:"
-            const allLines = fullText.split('\n');
-            const subjectLine = allLines.find(l => l.startsWith('Subject:'));
-            if (subjectLine) {
-              setSubject(subjectLine.replace('Subject:', '').trim());
-              setBody(
-                allLines
-                  .filter(l => !l.startsWith('Subject:'))
-                  .join('\n')
-                  .trim()
-              );
-            } else {
-              setBody(fullText);
-            }
-          } catch { /* ignore partial or non-JSON SSE line */ }
-        }
-      }
+      const { data } = await api.post('/api/ai/compose-email', { contactId, dealId, bulletPoints: bulletList });
+      setSubject(data.draft?.subject || '');
+      setBody(data.draft?.body || '');
     } catch (err) {
-      toast.error(err.message || 'Failed to generate email');
+      toast.error(err.response?.data?.error || 'Failed to generate email');
     } finally {
       setStreaming(false);
     }
