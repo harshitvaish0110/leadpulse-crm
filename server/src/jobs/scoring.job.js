@@ -90,7 +90,7 @@ async function scoreContact(contact, now) {
       if (winData.probability !== undefined) {
         await prisma.deal.update({
           where: { id: openDeal.id },
-          data:  { winProbability: Math.round(winData.probability * 100) },
+          data:  { winProbability: Math.min(1, Math.max(0, winData.probability)) },
         });
 
         emitScoped([openDeal.ownerId, contact.ownerId], 'deal:score_updated', {
