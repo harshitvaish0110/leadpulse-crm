@@ -16,6 +16,7 @@
 const cron   = require('node-cron');
 const { ml } = require('../lib/mlClient');
 const { emitScoped } = require('../lib/realtime');
+const { notify } = require('../lib/notify');
 const { prisma } = require('../lib/prisma');
 const { calculateAndSaveLeadScore } = require('../services/scoring.service');
 
@@ -57,12 +58,14 @@ async function scoreContact(contact, now) {
       data:  { churnRisk: newChurnRisk },
     });
 
-    // Emit real-time alert for high-risk contacts
-    if (newChurnRisk > 0.7) {
-      emitScoped([contact.ownerId], 'contact:churn_alert', {
-        contactId: contact.id,
-        name:      `${contact.firstName} ${contact.lastName}`,
-        churnRisk: newChurnRisk,
+    // Alert only when a contact crosses into high risk, not on every run.
+    if (newChurnRisk > 0.7 && (contact.churnRisk ?? 0) <= 0.7) {
+      const name = `${contact.firstName} ${contact.lastName}`;
+      emitScoped([contact.ownerId], 'contact:churn_alert', { contactId: contact.id, name, churnRisk: newChurnRisk });
+      notify([contact.ownerId], {
+        type: 'churn', title: 'Churn risk alert',
+        message: `${name} is now at ${Math.round(newChurnRisk * 100)}% churn risk`,
+        link: `/contacts/${contact.id}`, data: { contactId: contact.id },
       });
     }
   } catch (e) {

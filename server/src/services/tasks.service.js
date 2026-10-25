@@ -8,6 +8,7 @@ const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor, assertInScope, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
 const { emitToUsers } = require('../lib/realtime');
+const { notify } = require('../lib/notify');
 
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH'];
 
@@ -41,11 +42,15 @@ function checkPriority(priority) {
   }
 }
 
-const notifyAssignee = (task, actorId) => {
-  if (task.assignedToId !== actorId) {
-    emitToUsers([task.assignedToId], 'task:assigned', { taskId: task.id, title: task.title, dueDate: task.dueDate });
-  }
-};
+function notifyAssignee(task, actor) {
+  if (task.assignedToId === actor.id) return;
+  emitToUsers([task.assignedToId], 'task:assigned', { taskId: task.id, title: task.title, dueDate: task.dueDate });
+  notify([task.assignedToId], {
+    type: 'task', title: 'New task assigned',
+    message: `${actor.firstName} ${actor.lastName} assigned you "${task.title}"`,
+    link: '/tasks', data: { taskId: task.id },
+  });
+}
 
 async function createTask(user, input) {
   const { title, description, priority, contactId, dealId, assignedToId } = input;
@@ -66,7 +71,7 @@ async function createTask(user, input) {
     },
     include: TASK_INCLUDE,
   });
-  notifyAssignee(task, user.id);
+  notifyAssignee(task, user);
   return task;
 }
 
@@ -93,7 +98,7 @@ async function updateTask(user, taskId, input) {
   if (!before) throw ApiError.notFound('Task not found');
 
   const task = await prisma.task.update({ where: { id: taskId, ...scopeFor(user, 'task') }, data, include: TASK_INCLUDE });
-  if (task.assignedToId !== before.assignedToId) notifyAssignee(task, user.id);
+  if (task.assignedToId !== before.assignedToId) notifyAssignee(task, user);
   return task;
 }
 
