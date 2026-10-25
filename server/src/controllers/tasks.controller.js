@@ -1,27 +1,16 @@
 /**
  * LeadPulse CRM — Tasks Controller
+ *
+ * Reads live here; writes are in tasks.service.
  */
 
 'use strict';
 
-const { prisma }   = require('../lib/prisma');
-const { ApiError } = require('../middleware/error.middleware');
-const { scoped, scopeFor, assertInScope, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
-const { emitToUsers } = require('../lib/realtime');
+const { prisma } = require('../lib/prisma');
+const { scoped } = require('../middleware/auth.middleware');
+const tasks = require('../services/tasks.service');
 
-const TASK_INCLUDE = {
-  contact:    { select: { id: true, firstName: true, lastName: true } },
-  deal:       { select: { id: true, title: true } },
-  assignedTo: { select: { id: true, firstName: true, lastName: true } },
-  createdBy:  { select: { id: true, firstName: true, lastName: true } },
-};
-
-/** Linked contact/deal must be in the caller's scope; assignee follows the owner rule. */
-async function checkRefs(user, { contactId, dealId, assignedToId }) {
-  if (contactId) await assertContactInScope(user, contactId);
-  if (dealId) await assertInScope(user, 'deal', dealId);
-  return resolveOwnerId(user, assignedToId);
-}
+const { TASK_INCLUDE } = tasks;
 
 /**
  * GET /api/tasks
@@ -80,100 +69,25 @@ async function list(req, res, next) {
   }
 }
 
-/**
- * POST /api/tasks
- */
-async function create(req, res, next) {
-  try {
-    const { title, description, dueDate, priority, contactId, dealId, assignedToId } = req.body;
-
-    if (!title) throw ApiError.badRequest('title is required');
-    const assignee = (await checkRefs(req.user, { contactId, dealId, assignedToId })) ?? req.user.id;
-
-    const task = await prisma.task.create({
-      data: {
-        title:       title.trim(),
-        description: description || null,
-        dueDate:     dueDate     ? new Date(dueDate) : null,
-        priority:    priority    || 'MEDIUM',
-        contactId:   contactId   || null,
-        dealId:      dealId      || null,
-        assignedToId: assignee,
-        createdById:  req.user.id,
-      },
-      include: TASK_INCLUDE,
-    });
-
-    if (task.assignedToId !== req.user.id) {
-      emitToUsers([task.assignedToId], 'task:assigned', { taskId: task.id, title: task.title, dueDate: task.dueDate });
-    }
-
-    res.status(201).json({ success: true, task });
-  } catch (err) {
-    next(err);
-  }
+/** POST /api/tasks */
+async function create(req, res) {
+  res.status(201).json({ success: true, task: await tasks.createTask(req.user, req.body) });
 }
 
-/**
- * PATCH /api/tasks/:id
- */
-async function update(req, res, next) {
-  try {
-    const ALLOWED = ['title', 'description', 'dueDate', 'priority', 'assignedToId', 'contactId', 'dealId'];
-    const data = {};
-    for (const f of ALLOWED) {
-      if (req.body[f] !== undefined) data[f] = req.body[f];
-    }
-    if (data.dueDate) data.dueDate = new Date(data.dueDate);
-    const assignee = await checkRefs(req.user, data);
-    if ('assignedToId' in data) data.assignedToId = assignee;
-
-    const task = await prisma.task.update({
-      where:   { id: req.params.id, ...scopeFor(req.user, 'task') },
-      data,
-      include: TASK_INCLUDE,
-    });
-
-    res.json({ success: true, task });
-  } catch (err) {
-    next(err);
-  }
+/** PATCH /api/tasks/:id */
+async function update(req, res) {
+  res.json({ success: true, task: await tasks.updateTask(req.user, req.params.id, req.body) });
 }
 
-/**
- * PATCH /api/tasks/:id/complete
- * Marks a task as complete (or incomplete).
- */
-async function complete(req, res, next) {
-  try {
-    const { completed = true } = req.body;
-    const isComplete = Boolean(completed);
-
-    const task = await prisma.task.update({
-      where: { id: req.params.id, ...scopeFor(req.user, 'task') },
-      data:  {
-        completed:   isComplete,
-        completedAt: isComplete ? new Date() : null,
-      },
-      include: TASK_INCLUDE,
-    });
-
-    res.json({ success: true, task });
-  } catch (err) {
-    next(err);
-  }
+/** PATCH /api/tasks/:id/complete — `{ completed }` (default true). */
+async function complete(req, res) {
+  res.json({ success: true, task: await tasks.setCompleted(req.user, req.params.id, req.body?.completed) });
 }
 
-/**
- * DELETE /api/tasks/:id
- */
-async function remove(req, res, next) {
-  try {
-    await prisma.task.delete({ where: { id: req.params.id, ...scopeFor(req.user, 'task') } });
-    res.json({ success: true, message: 'Task deleted' });
-  } catch (err) {
-    next(err);
-  }
+/** DELETE /api/tasks/:id */
+async function remove(req, res) {
+  await tasks.deleteTask(req.user, req.params.id);
+  res.json({ success: true, message: 'Task deleted' });
 }
 
 module.exports = { list, create, update, complete, remove };

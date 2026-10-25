@@ -1,22 +1,17 @@
 /**
  * LeadPulse CRM — Deals Controller
  *
- * Kanban-grouped view, full CRUD, and stage-change with Socket.IO push.
+ * Kanban-grouped and paginated reads; writes go through deals.service.
  */
 
 'use strict';
 
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
-const { scoped, scopeFor, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
-const { emitScoped } = require('../lib/realtime');
+const { scoped, scopeFor } = require('../middleware/auth.middleware');
+const deals = require('../services/deals.service');
 
-const DEAL_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
-
-const DEAL_LIST_INCLUDE = {
-  contact: { select: { id: true, firstName: true, lastName: true, email: true, ownerId: true } },
-  owner:   { select: { id: true, firstName: true, lastName: true } },
-};
+const { DEAL_STAGES, DEAL_LIST_INCLUDE } = deals;
 
 /** Detail include; activity and task sub-lists follow the caller's own scopes. */
 const dealDetailInclude = (user) => ({
@@ -26,6 +21,7 @@ const dealDetailInclude = (user) => ({
     },
   },
   owner:      { select: { id: true, firstName: true, lastName: true, email: true } },
+  pipelineStage: { select: { id: true, label: true, color: true, position: true } },
   activities: {
     where:   scopeFor(user, 'activity'),
     orderBy: { occurredAt: 'desc' },
@@ -39,15 +35,13 @@ const dealDetailInclude = (user) => ({
   },
 });
 
-/** Deal events go to the deal owner, the contact owner and managers. */
-const emitDeal = (deal, event, payload) => emitScoped([deal.ownerId, deal.contact?.ownerId], event, payload);
-
-function buildWhere({ search, ownerId, contactId, stage }) {
+function buildWhere({ search, ownerId, contactId, companyId, stage }) {
   return {
     AND: [
       search    ? { title: { contains: search, mode: 'insensitive' } } : {},
       ownerId   ? { ownerId }   : {},
       contactId ? { contactId } : {},
+      companyId ? { contact: { companyId } } : {},
       stage     ? { stage }     : {},
     ],
   };
@@ -59,8 +53,8 @@ function buildWhere({ search, ownerId, contactId, stage }) {
  */
 async function list(req, res, next) {
   try {
-    const { view = 'kanban', search = '', ownerId, contactId, stage, page = 1, limit = 50 } = req.query;
-    const where = scoped(req.user, 'deal', buildWhere({ search, ownerId, contactId, stage }));
+    const { view = 'kanban', search = '', ownerId, contactId, companyId, stage, page = 1, limit = 50 } = req.query;
+    const where = scoped(req.user, 'deal', buildWhere({ search, ownerId, contactId, companyId, stage }));
 
     if (view === 'kanban') {
       // Parallel fetch all stages — much faster than sequential
@@ -105,40 +99,9 @@ async function list(req, res, next) {
   }
 }
 
-/**
- * POST /api/deals
- */
-async function create(req, res, next) {
-  try {
-    const { title, value, stage, contactId, expectedCloseDate, notes, lostReason } = req.body;
-
-    if (!title || !contactId) throw ApiError.badRequest('title and contactId are required');
-    if (stage && !DEAL_STAGES.includes(stage)) {
-      throw ApiError.badRequest(`stage must be one of: ${DEAL_STAGES.join(', ')}`);
-    }
-
-    await assertContactInScope(req.user, contactId);
-    const ownerId = (await resolveOwnerId(req.user, req.body.ownerId)) ?? req.user.id;
-
-    const deal = await prisma.deal.create({
-      data: {
-        title:            title.trim(),
-        value:            value            ? parseFloat(value)         : 0,
-        stage:            stage            || 'LEAD',
-        expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
-        notes:            notes            || null,
-        lostReason:       lostReason       || null,
-        contactId,
-        ownerId,
-      },
-      include: DEAL_LIST_INCLUDE,
-    });
-
-    emitDeal(deal, 'deal:created', { dealId: deal.id, stage: deal.stage });
-    res.status(201).json({ success: true, deal });
-  } catch (err) {
-    next(err);
-  }
+/** POST /api/deals */
+async function create(req, res) {
+  res.status(201).json({ success: true, deal: await deals.createDeal(req.user, req.body) });
 }
 
 /**
@@ -158,94 +121,21 @@ async function getOne(req, res, next) {
   }
 }
 
-/**
- * PATCH /api/deals/:id
- */
-async function update(req, res, next) {
-  try {
-    const ALLOWED = [
-      'title', 'value', 'stage', 'winProbability', 'expectedCloseDate',
-      'lostReason', 'notes', 'ownerId',
-    ];
-    const data = {};
-    for (const f of ALLOWED) {
-      if (req.body[f] !== undefined) data[f] = req.body[f];
-    }
-    if (data.value)             data.value             = parseFloat(data.value);
-    if (data.winProbability)    data.winProbability    = parseFloat(data.winProbability);
-    if (data.expectedCloseDate) data.expectedCloseDate = new Date(data.expectedCloseDate);
-    if (data.stage && !DEAL_STAGES.includes(data.stage)) {
-      throw ApiError.badRequest(`Invalid stage: ${data.stage}`);
-    }
-    if ('ownerId' in data) data.ownerId = await resolveOwnerId(req.user, data.ownerId);
-
-    const deal = await prisma.deal.update({
-      where:   { id: req.params.id, ...scopeFor(req.user, 'deal') },
-      data,
-      include: DEAL_LIST_INCLUDE,
-    });
-
-    emitDeal(deal, 'deal:updated', { dealId: deal.id });
-    res.json({ success: true, deal });
-  } catch (err) {
-    next(err);
-  }
+/** PATCH /api/deals/:id — editable fields, plus `stage` / `pipelineStageId`. */
+async function update(req, res) {
+  res.json({ success: true, deal: await deals.updateDeal(req.user, req.params.id, req.body) });
 }
 
-/**
- * PATCH /api/deals/:id/stage
- * Dedicated stage-change endpoint — emits targeted Socket.IO event to deal owner.
- */
-async function updateStage(req, res, next) {
-  try {
-    const { stage } = req.body;
-    if (!stage || !DEAL_STAGES.includes(stage)) {
-      throw ApiError.badRequest(`stage must be one of: ${DEAL_STAGES.join(', ')}`);
-    }
-
-    const where = { id: req.params.id, ...scopeFor(req.user, 'deal') };
-    const before = await prisma.deal.findFirst({ where, select: { stage: true } });
-    if (!before) throw ApiError.notFound('Deal not found');
-
-    const deal = await prisma.deal.update({
-      where,
-      data:  {
-        stage,
-        // Auto-set win probability when moving to terminal stages
-        ...(stage === 'CLOSED_WON'  && { winProbability: 1.0 }),
-        ...(stage === 'CLOSED_LOST' && { winProbability: 0.0 }),
-      },
-      include: DEAL_LIST_INCLUDE,
-    });
-
-    emitDeal(deal, 'deal:stage_changed', {
-      dealId:    deal.id,
-      title:     deal.title,
-      fromStage: before.stage,
-      toStage:   deal.stage,
-      value:     Number(deal.value),
-    });
-
-    res.json({ success: true, deal });
-  } catch (err) {
-    next(err);
-  }
+/** PATCH /api/deals/:id/stage — `{ stage }` or `{ pipelineStageId }`. */
+async function updateStage(req, res) {
+  const { stage, pipelineStageId } = req.body ?? {};
+  res.json({ success: true, deal: await deals.changeStage(req.user, req.params.id, { stage, pipelineStageId }) });
 }
 
-/**
- * DELETE /api/deals/:id
- */
-async function remove(req, res, next) {
-  try {
-    const deal = await prisma.deal.delete({
-      where:  { id: req.params.id, ...scopeFor(req.user, 'deal') },
-      select: { id: true, ownerId: true, contact: { select: { ownerId: true } } },
-    });
-    emitDeal(deal, 'deal:deleted', { dealId: deal.id });
-    res.json({ success: true, message: 'Deal deleted' });
-  } catch (err) {
-    next(err);
-  }
+/** DELETE /api/deals/:id */
+async function remove(req, res) {
+  await deals.deleteDeal(req.user, req.params.id);
+  res.json({ success: true, message: 'Deal deleted' });
 }
 
 module.exports = { list, create, getOne, update, updateStage, remove };
