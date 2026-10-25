@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Globe, Users, TrendingUp,
@@ -18,6 +18,7 @@ import Input from '../../components/ui/Input';
 import EmptyState from '../../components/ui/EmptyState';
 import { formatCurrency, formatDate, formatPercent, humanize, probabilityColor, toPercent } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
+import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 
 const STAGE_VARIANT = {
@@ -57,8 +58,11 @@ export default function CompanyDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [tab, setTab] = useState('contacts');
+  const [params, setParams] = useSearchParams();
+  const tab = ['contacts', 'deals', 'activities'].includes(params.get('tab')) ? params.get('tab') : 'contacts';
+  const setTab = (key) => setParams(key === 'contacts' ? {} : { tab: key }, { replace: true });
   const [editing, setEditing] = useState(false);
+  const canDelete = useAuthStore((s) => ['ADMIN', 'MANAGER'].includes(s.user?.role));
 
   const contactParams = { companyId: id, limit: 50 };
   const dealParams = { companyId: id, view: 'list', limit: 50 };
@@ -167,10 +171,12 @@ export default function CompanyDetail() {
             <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
               <Edit2 size={14} className="mr-1.5" /> Edit
             </Button>
-            <Button variant="danger" size="sm"
-              onClick={() => { if (confirm('Delete this company?')) deleteMutation.mutate(); }}>
-              <Trash2 size={14} className="mr-1.5" /> Delete
-            </Button>
+            {canDelete && (
+              <Button variant="danger" size="sm"
+                onClick={() => { if (confirm('Delete this company?')) deleteMutation.mutate(); }}>
+                <Trash2 size={14} className="mr-1.5" /> Delete
+              </Button>
+            )}
           </div>
         </div>
 
