@@ -19,9 +19,10 @@ __pycache__/
 venv/
 *.pkl
 
-# ML model artifacts
+# ML models: the trained churn/win artifacts and metadata.json are committed;
+# the ONNX models are downloaded by scripts/fetch_models.py.
 ml-service/models/*.pkl
-ml-service/models/*.joblib
+ml-service/models/onnx/
 
 # IDE
 .vscode/
