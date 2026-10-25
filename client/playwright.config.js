@@ -7,7 +7,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  timeout: 60_000,
+  // The dev stack compiles pages on demand and computes forecasts per request, so allow headroom.
+  timeout: 120_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
