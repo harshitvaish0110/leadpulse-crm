@@ -57,7 +57,10 @@ function createApp() {
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
     skip: () => process.env.NODE_ENV === 'test',
   }));
-  app.use(express.json({ limit: '1mb' }));
+  // 1 MB everywhere except routes that declare their own, larger limit.
+  const LARGE_BODY_ROUTES = new Set(['/api/contacts/import']);
+  const json = express.json({ limit: '1mb' });
+  app.use((req, res, next) => (LARGE_BODY_ROUTES.has(req.path) ? next() : json(req, res, next)));
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', service: 'leadpulse-server', timestamp: new Date().toISOString() });
