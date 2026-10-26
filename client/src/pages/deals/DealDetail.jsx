@@ -12,7 +12,8 @@ import Input from '../../components/ui/Input';
 import SlideOver from '../../components/ui/SlideOver';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorBoundary from '../../components/ErrorBoundary';
-import DealSummaryPanel from '../../components/ai/DealSummaryPanel';
+import StreamingMarkdownCard from '../../components/ai/StreamingMarkdownCard';
+import ActionLauncher from '../../components/ai/ActionLauncher';
 import NextActionCard from '../../components/ai/NextActionCard';
 import ActivityTimeline from '../../components/activities/ActivityTimeline';
 import LogActivityModal from '../../components/activities/LogActivityModal';
@@ -143,6 +144,7 @@ export default function DealDetail() {
   const { data: stages = [] } = usePipelineStages();
   const { data: directory = [] } = useDirectory();
   const [logging, setLogging] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
   const [editing, setEditing] = useState(false);
   const [pendingLost, setPendingLost] = useState(null);
 
@@ -267,7 +269,15 @@ export default function DealDetail() {
 
         {/* RIGHT — AI, probability, next action, timeline */}
         <div className="space-y-4 min-w-0">
-          <ErrorBoundary compact title="The AI briefing could not be shown"><DealSummaryPanel dealId={id} /></ErrorBoundary>
+          <ErrorBoundary compact title="The AI briefing could not be shown">
+            <StreamingMarkdownCard
+              title="AI deal briefing"
+              subtitle="From this deal's stage history, activities and emails"
+              endpoint={`/api/ai/deal-summary/${id}`}
+              emptyHint="Background, concerns raised, the last interaction and talking points for your next call."
+              actionLabel="Generate AI summary"
+            />
+          </ErrorBoundary>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col items-center justify-center">
@@ -277,7 +287,8 @@ export default function DealDetail() {
             </div>
             {deal.contact && (
               <ErrorBoundary compact>
-                <NextActionCard contactId={deal.contactId} dealId={deal.id} initialAction={deal.contact.nextBestAction} onActionTaken={() => setLogging(true)} />
+                <NextActionCard key={deal.contact.nextBestActionAt ?? 'none'} contactId={deal.contactId} dealId={deal.id}
+                  initial={deal.contact.nextBestAction} generatedAt={deal.contact.nextBestActionAt} onDoIt={setPendingAction} />
               </ErrorBoundary>
             )}
           </div>
@@ -302,6 +313,7 @@ export default function DealDetail() {
       </div>
 
       <LogActivityModal isOpen={logging} onClose={() => setLogging(false)} contact={contactRef} dealId={deal.id} />
+      {contactRef && <ActionLauncher request={pendingAction} onClose={() => setPendingAction(null)} contact={contactRef} dealId={deal.id} />}
       <LostReasonDialog key={pendingLost ? 'open' : 'closed'} pending={pendingLost} onCancel={() => setPendingLost(null)}
         onConfirm={(lostReason) => { move.mutate({ ...pendingLost, lostReason }); setPendingLost(null); }} />
       <SlideOver isOpen={editing} onClose={() => setEditing(false)} title="Edit Deal">

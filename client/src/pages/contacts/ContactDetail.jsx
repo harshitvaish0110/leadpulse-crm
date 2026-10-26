@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
-import { ArrowLeft, Mail, Phone, Building2, Edit2, Trash2, Plus, TrendingUp } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, Building2, Edit2, Trash2, Plus, TrendingUp, Sparkles } from 'lucide-react';
 import api from '../../api/axiosInstance';
 import { getContact, updateContact, deleteContact } from '../../api/contacts';
 import { getActivities } from '../../api/activities';
@@ -16,6 +16,8 @@ import SlideOver from '../../components/ui/SlideOver';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import NextActionCard from '../../components/ai/NextActionCard';
+import ActionLauncher from '../../components/ai/ActionLauncher';
+import EnrichModal from '../../components/ai/EnrichModal';
 import ActivityTimeline from '../../components/activities/ActivityTimeline';
 import LogActivityModal from '../../components/activities/LogActivityModal';
 import ContactEmails from '../../components/contacts/ContactEmails';
@@ -83,7 +85,7 @@ function SentimentSparkline({ contactId }) {
   );
 }
 
-function ProfilePanel({ contact, onEdit, onDelete }) {
+function ProfilePanel({ contact, onEdit, onDelete, onEnrich }) {
   const qc = useQueryClient();
   const isPrivileged = useAuthStore((s) => ['ADMIN', 'MANAGER'].includes(s.user?.role));
   const { data: directory = [] } = useDirectory();
@@ -92,12 +94,17 @@ function ProfilePanel({ contact, onEdit, onDelete }) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: qk.contacts.all }); toast.success('Owner updated'); },
     onError: (err) => toast.error(apiError(err, 'Could not change the owner')),
   });
+  const explain = useMutation({
+    mutationFn: () => api.post(`/api/ai/lead-score/${contact.id}/explain`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.contacts.detail(contact.id) }),
+    onError: (err) => toast.error(apiError(err, 'Could not explain the score')),
+  });
 
   return (
     <aside className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
       <div className="flex items-start gap-4">
         <Avatar firstName={contact.firstName} lastName={contact.lastName} size="lg" />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold text-gray-900">{contact.firstName} {contact.lastName}</h1>
           <p className="text-sm text-gray-500">
             {contact.title}
@@ -108,6 +115,7 @@ function ProfilePanel({ contact, onEdit, onDelete }) {
             <ScoreBadge label={contact.leadScoreLabel} score={contact.leadScore} explanation={contact.leadScoreExplanation} />
           </div>
         </div>
+        <Button variant="secondary" size="sm" onClick={onEnrich}><Sparkles size={13} className="mr-1" /> Enrich</Button>
       </div>
 
       <div className="space-y-2 text-sm">
@@ -116,7 +124,13 @@ function ProfilePanel({ contact, onEdit, onDelete }) {
         {contact.company && <p className="flex items-center gap-2 text-gray-700"><Building2 size={14} className="text-gray-400" /> {contact.company.industry || 'Company'}</p>}
       </div>
 
-      {contact.leadScoreExplanation && <p className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">{contact.leadScoreExplanation}</p>}
+      <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3 space-y-1.5">
+        <p>{contact.leadScoreExplanation || `${contact.leadScore}/120 points`}</p>
+        <button type="button" onClick={() => explain.mutate()} disabled={explain.isPending}
+          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-700 font-medium disabled:opacity-60">
+          <Sparkles size={11} /> {explain.isPending ? 'Explaining…' : 'Explain with AI'}
+        </button>
+      </div>
 
       <div className="space-y-3">
         <div>
@@ -185,6 +199,8 @@ export default function ContactDetail() {
   const setTab = (key) => setParams(key === 'overview' ? {} : { tab: key }, { replace: true });
   const [editing, setEditing] = useState(false);
   const [logging, setLogging] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
 
   const { data: contactData, isLoading } = useQuery({
     queryKey: qk.contacts.detail(id),
@@ -228,14 +244,6 @@ export default function ContactDetail() {
   const contactRef = { id: contact.id, name: `${contact.firstName} ${contact.lastName}` };
   const activities = activitiesData?.activities || [];
 
-  // "Do it" on the AI recommendation opens the matching action.
-  const doAction = (action) => {
-    const channel = action?.channel || action?.type;
-    if (channel === 'EMAIL') setTab('emails');
-    else if (channel === 'TASK') setTab('tasks');
-    else setLogging(true);
-  };
-
   return (
     <div className="max-w-7xl mx-auto space-y-4">
       <button onClick={() => navigate('/contacts')} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors">
@@ -243,7 +251,7 @@ export default function ContactDetail() {
       </button>
 
       <div className="grid grid-cols-1 xl:grid-cols-[35fr_65fr] gap-6 items-start">
-        <ProfilePanel contact={contact} onEdit={() => setEditing(true)}
+        <ProfilePanel contact={contact} onEdit={() => setEditing(true)} onEnrich={() => setEnriching(true)}
           onDelete={() => { if (confirm('Delete this contact? Their deals, activities and emails are deleted too.')) deleteMutation.mutate(); }} />
 
         <section className="bg-white rounded-2xl border border-gray-100 shadow-sm min-w-0">
@@ -261,7 +269,8 @@ export default function ContactDetail() {
             <ErrorBoundary key={tab} compact>
               {tab === 'overview' && (
                 <div className="space-y-6">
-                  <NextActionCard contactId={id} initialAction={contact.nextBestAction} onActionTaken={doAction} />
+                  <NextActionCard key={contact.nextBestActionAt ?? 'none'} contactId={id}
+                    initial={contact.nextBestAction} generatedAt={contact.nextBestActionAt} onDoIt={setPendingAction} />
                   {contact.deals?.length > 0 && (
                     <div>
                       <h2 className="text-sm font-semibold text-gray-700 mb-3">Open deals</h2>
@@ -299,6 +308,9 @@ export default function ContactDetail() {
       </div>
 
       <LogActivityModal isOpen={logging} onClose={() => setLogging(false)} contact={contactRef} />
+      <ActionLauncher request={pendingAction} onClose={() => setPendingAction(null)} contact={contactRef} onEmailSaved={() => setTab('emails')} />
+      <EnrichModal isOpen={enriching} onClose={() => setEnriching(false)} contact={contact}
+        onApplied={() => { qc.invalidateQueries({ queryKey: qk.contacts.all }); qc.invalidateQueries({ queryKey: qk.activities.all }); }} />
 
       <SlideOver isOpen={editing} onClose={() => setEditing(false)} title="Edit Contact">
         <EditContactForm key={`${contact.id}-${contact.updatedAt}`} contact={contact}

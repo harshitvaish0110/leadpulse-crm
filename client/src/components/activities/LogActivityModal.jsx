@@ -19,11 +19,11 @@ const toLocalInput = (date) => {
   return d.toISOString().slice(0, 16);
 };
 
-function LogActivityForm({ contact: fixedContact, dealId: fixedDealId, onClose }) {
+function LogActivityForm({ contact: fixedContact, dealId: fixedDealId, initial, onClose }) {
   const qc = useQueryClient();
   const [contact, setContact] = useState(fixedContact ?? null);
   const [form, setForm] = useState({
-    type: 'CALL', subject: '', notes: '', durationMinutes: '',
+    type: initial?.type ?? 'CALL', subject: initial?.subject ?? '', notes: '', durationMinutes: '',
     dealId: fixedDealId ?? '', occurredAt: toLocalInput(new Date()),
   });
   const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
@@ -113,13 +113,14 @@ function LogActivityForm({ contact: fixedContact, dealId: fixedDealId, onClose }
 
 /**
  * Log an activity. Pass `contact` ({ id, name }) to fix the contact, and
- * `dealId` to fix the deal; otherwise the form asks for them.
+ * `dealId` to fix the deal; otherwise the form asks for them. `initial`
+ * ({ type, subject }) prefills the form, e.g. from a recommended action.
  */
-export default function LogActivityModal({ isOpen, onClose, contact, dealId }) {
+export default function LogActivityModal({ isOpen, onClose, contact, dealId, initial }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Log Activity">
       {/* Remounts per opening, so the form always starts fresh. */}
-      {isOpen && <LogActivityForm contact={contact} dealId={dealId} onClose={onClose} />}
+      {isOpen && <LogActivityForm contact={contact} dealId={dealId} initial={initial} onClose={onClose} />}
     </Modal>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { formatCurrency, formatDate, formatPercent, toPercent } from './format';
+import { formatCurrency, formatDate, formatPercent, timeAgo, toPercent } from './format';
+import { parseEmail } from './email';
 import { renderMarkdown } from './markdown';
 import { createSSEParser } from './sse';
 
@@ -87,5 +88,31 @@ describe('task grouping', async () => {
     expect(grid).toHaveLength(42);
     expect(grid[0].getDay()).toBe(1);
     expect(grid.some((d) => d.getMonth() === 9 && d.getDate() === 31)).toBe(true);
+  });
+});
+
+describe('parseEmail', () => {
+  it('splits the subject line from the body', () => {
+    expect(parseEmail('Subject: Next steps\n\nHi Ana,\nThanks!')).toEqual({ subject: 'Next steps', body: 'Hi Ana,\nThanks!' });
+    expect(parseEmail('  subject:Hello\r\n\r\nBody')).toEqual({ subject: 'Hello', body: 'Body' });
+  });
+
+  it('keeps an unfinished subject line out of the body while streaming', () => {
+    expect(parseEmail('Subject: Next st')).toEqual({ subject: 'Next st', body: '' });
+  });
+
+  it('treats text without a subject line as body', () => {
+    expect(parseEmail('Hi Ana')).toEqual({ subject: '', body: 'Hi Ana' });
+    expect(parseEmail(undefined)).toEqual({ subject: '', body: '' });
+  });
+});
+
+describe('timeAgo', () => {
+  const now = Date.parse('2026-10-26T12:00:00Z');
+  it('describes past times in words', () => {
+    expect(timeAgo('2026-10-26T11:59:40Z', now)).toBe('just now');
+    expect(timeAgo('2026-10-26T10:00:00Z', now)).toBe('2 hours ago');
+    expect(timeAgo('2026-10-25T12:00:00Z', now)).toBe('yesterday');
+    expect(timeAgo('not a date', now)).toBe('');
   });
 });
