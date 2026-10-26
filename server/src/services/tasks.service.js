@@ -11,6 +11,7 @@ const { emitToUsers } = require('../lib/realtime');
 const { notify } = require('../lib/notify');
 
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH'];
+const DAY_MS = 86_400_000;
 
 const TASK_INCLUDE = {
   contact:    { select: { id: true, firstName: true, lastName: true } },
@@ -89,7 +90,12 @@ async function updateTask(user, taskId, input) {
     data.priority = input.priority;
   }
   const dueDate = parseDue(input.dueDate);
-  if (dueDate !== undefined) data.dueDate = dueDate;
+  if (dueDate !== undefined) {
+    data.dueDate = dueDate;
+    // A new due date gets its own reminders.
+    data.dueSoonNotifiedAt = null;
+    data.overdueNotifiedAt = null;
+  }
 
   const assignee = await checkRefs(user, { contactId: data.contactId, dealId: data.dealId, assignedToId: input.assignedToId });
   if (input.assignedToId !== undefined && assignee) data.assignedToId = assignee;
@@ -116,4 +122,41 @@ async function deleteTask(user, taskId) {
   await prisma.task.delete({ where: { id: taskId, ...scopeFor(user, 'task') } });
 }
 
-module.exports = { PRIORITIES, TASK_INCLUDE, createTask, updateTask, setCompleted, deleteTask };
+/**
+ * Job `task-reminders` (hourly): one "due soon" alert when an open task comes
+ * within 24 h of its due date, and one "overdue" alert once it passes. Each
+ * flag is claimed with a conditional update, so overlapping runs can't alert twice.
+ * Tasks overdue for more than a day when first seen (a backlog, or after
+ * downtime) are marked without an alert — the Tasks page already lists them.
+ */
+async function sendReminders(now = new Date()) {
+  const soonCutoff = new Date(now.getTime() + DAY_MS);
+  const staleCutoff = new Date(now.getTime() - DAY_MS);
+  const select = { id: true, title: true, dueDate: true, assignedToId: true };
+
+  const [dueSoon, overdue] = await Promise.all([
+    prisma.task.findMany({ where: { completed: false, dueSoonNotifiedAt: null, dueDate: { gt: now, lte: soonCutoff } }, select }),
+    prisma.task.findMany({ where: { completed: false, overdueNotifiedAt: null, dueDate: { lte: now, gte: staleCutoff } }, select }),
+  ]);
+
+  const send = async (task, flag, event, title, message) => {
+    const { count } = await prisma.task.updateMany({ where: { id: task.id, [flag]: null }, data: { [flag]: now } });
+    if (!count) return 0;
+    emitToUsers([task.assignedToId], event, { taskId: task.id, title: task.title, dueDate: task.dueDate });
+    await notify([task.assignedToId], { type: 'task', title, message, link: '/tasks', data: { taskId: task.id } });
+    return 1;
+  };
+
+  let soonSent = 0;
+  let overdueSent = 0;
+  for (const t of dueSoon) soonSent += await send(t, 'dueSoonNotifiedAt', 'task:due_soon', 'Task due soon', `"${t.title}" is due within 24 hours`);
+  for (const t of overdue) overdueSent += await send(t, 'overdueNotifiedAt', 'task:overdue', 'Task overdue', `"${t.title}" is past its due date`);
+
+  const { count: backlog } = await prisma.task.updateMany({
+    where: { completed: false, overdueNotifiedAt: null, dueDate: { lt: staleCutoff } },
+    data: { overdueNotifiedAt: now },
+  });
+  return { dueSoon: soonSent, overdue: overdueSent, backlogMarked: backlog };
+}
+
+module.exports = { PRIORITIES, TASK_INCLUDE, createTask, updateTask, setCompleted, deleteTask, sendReminders };

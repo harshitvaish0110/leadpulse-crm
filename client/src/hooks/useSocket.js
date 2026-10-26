@@ -54,7 +54,7 @@ export function useSocket() {
     ['deal:created', 'deal:updated', 'deal:deleted', 'deal:stage_changed', 'deal:score_updated'].forEach((event) => {
       socket.on(event, () => refresh(qk.deals.all, qk.analytics.all));
     });
-    ['activity:created', 'activity:deleted'].forEach((event) => {
+    ['activity:created', 'activity:updated', 'activity:deleted'].forEach((event) => {
       socket.on(event, () => refresh(qk.activities.all, qk.contacts.all));
     });
     ['contact:created', 'contact:updated', 'contact:deleted', 'contact:churn_alert'].forEach((event) => {
