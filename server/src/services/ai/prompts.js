@@ -319,6 +319,25 @@ function chatAnswer({ question, chunks, history = [], userName, today }) {
   };
 }
 
+// ── My Day briefing (plain text) ───────────────────────────────────────────────
+
+/** A few sentences that tell the user what matters most today, from the facts given. */
+function dailyBriefing({ userName, today, facts }) {
+  return {
+    feature: 'daily_briefing',
+    messages: messages(
+      `You write ${userName}'s start-of-day sales briefing: 2 or 3 short sentences, at most 70 words, on what matters most today and why. `
+      + 'Overdue or high-priority tasks first, then deals about to close or stuck, then accounts at risk. Name at most three records in all '
+      + 'and give the rest as counts. Use only the facts given; never invent numbers, dates or names. No greeting, headings, lists or closing line.',
+      `Today is ${today}.\n${crm(facts)}`,
+    ),
+    maxTokens: 600, // reasoning models spend part of the budget before they write
+    temperature: 0.4,
+    finish: (s) => clip(s.replace(/^\s*(good (morning|day)[^.!]*[.!]\s*)/i, ''), 700),
+    mock: 'Two tasks are overdue, starting with the contract call. One deal is set to close this week; confirm the decision date.',
+  };
+}
+
 // ── Structured queries the assistant may run (JSON plan; checked in crmQueries) ─
 
 /**
@@ -434,6 +453,6 @@ Return JSON only: {"summary": "3 sentences", "actionItems": ["..."], "sentiment"
 
 module.exports = {
   SAFETY, NO_ANSWER, crm, EMAIL_TONES, REPLY_TONES, ACTION_TYPES, ACTION_KINDS, DEAL_SECTIONS, BUDGET_TIERS,
-  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, leadExplain, enrich, chatAnswer, planQueries, proposeActions, transcriptExtract,
+  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, leadExplain, enrich, chatAnswer, planQueries, proposeActions, transcriptExtract, dailyBriefing,
   cleanReply, cleanExplanation,
 };
