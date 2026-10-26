@@ -29,8 +29,11 @@ const AIAssistant          = lazy(() => import('./pages/AIAssistant'));
 const SettingsLayout       = lazy(() => import('./pages/settings/SettingsLayout'));
 const ProfileSettings      = lazy(() => import('./pages/settings/ProfileSettings'));
 const GeneralSettings      = lazy(() => import('./pages/settings/GeneralSettings'));
+const PipelineSettings     = lazy(() => import('./pages/settings/PipelineSettings'));
+const FieldsSettings       = lazy(() => import('./pages/settings/FieldsSettings'));
 const UsersSettings        = lazy(() => import('./pages/settings/UsersSettings'));
 const IntegrationsSettings = lazy(() => import('./pages/settings/IntegrationsSettings'));
+const WebhooksSettings     = lazy(() => import('./pages/settings/WebhooksSettings'));
 const AuditLogSettings     = lazy(() => import('./pages/settings/AuditLogSettings'));
 
 const queryClient = new QueryClient({
@@ -86,8 +89,11 @@ export default function App() {
                 <Route path="profile" element={<ProfileSettings />} />
                 <Route element={<RoleRoute roles={['ADMIN']} />}>
                   <Route path="general"      element={<GeneralSettings />} />
+                  <Route path="pipeline"     element={<PipelineSettings />} />
+                  <Route path="fields"       element={<FieldsSettings />} />
                   <Route path="users"        element={<UsersSettings />} />
                   <Route path="integrations" element={<IntegrationsSettings />} />
+                  <Route path="webhooks"     element={<WebhooksSettings />} />
                   <Route path="audit"        element={<AuditLogSettings />} />
                 </Route>
               </Route>
