@@ -39,19 +39,27 @@ async function predict(path, rows, features, key) {
   return out;
 }
 
-/**
- * @param {string} contactId
- * @param {Date}   [now]
- * @returns {Promise<{ score: number, label: string, explanation: string }>}
- */
-async function calculateAndSaveLeadScore(contactId, now = new Date()) {
+/** One history point (the AI Insights charts read these). */
+const snapshot = (entityType, entityId, metric, value) => prisma.scoreSnapshot.create({ data: { entityType, entityId, metric, value } });
+
+/** The lead score as of `now`, with its components, without saving it. */
+async function leadScoreResult(contactId, now = new Date()) {
   const [last, activityCount30d, openDeals] = await Promise.all([
     prisma.activity.findFirst({ where: { contactId }, orderBy: { occurredAt: 'desc' }, select: { occurredAt: true } }),
     prisma.activity.count({ where: { contactId, occurredAt: { gt: new Date(now.getTime() - 30 * DAY_MS) } } }),
     prisma.deal.findMany({ where: { contactId, stage: { notIn: CLOSED } }, select: { value: true, stage: true } }),
   ]);
+  return computeLeadScore({ lastActivityAt: last?.occurredAt ?? null, activityCount30d, openDeals, now });
+}
 
-  const result = computeLeadScore({ lastActivityAt: last?.occurredAt ?? null, activityCount30d, openDeals, now });
+/**
+ * Recomputes and stores the score, label and rules explanation.
+ * @param {string} contactId
+ * @param {Date}   [now]
+ * @returns {Promise<{ score: number, label: string, explanation: string }>}
+ */
+async function calculateAndSaveLeadScore(contactId, now = new Date()) {
+  const result = await leadScoreResult(contactId, now);
   const explanation = explainLeadScore(result);
 
   await prisma.contact.update({
@@ -69,6 +77,7 @@ async function rescoreContact(contactId) {
   const after = await calculateAndSaveLeadScore(contactId);
   const changed = after.score !== before.leadScore || after.label !== before.leadScoreLabel;
   if (changed) {
+    await snapshot('contact', contactId, 'leadScore', after.score);
     emitScoped([before.ownerId], 'contact:updated', { contactId, leadScore: after.score, leadScoreLabel: after.label });
     triggers.reindex('contact', contactId);
   }
@@ -90,6 +99,7 @@ async function rescoreDeal(dealId) {
     select: { ownerId: true, contact: { select: { ownerId: true } } },
   });
   if (Math.abs(probability - before.winProbability) >= MIN_CHANGE) {
+    await snapshot('deal', dealId, 'winProbability', probability);
     emitScoped([deal.ownerId, deal.contact.ownerId], 'deal:score_updated', { dealId, winProbability: probability });
     triggers.reindex('deal', dealId);
   }
@@ -159,7 +169,7 @@ async function writeSnapshots(contactIds, now = new Date()) {
 }
 
 module.exports = {
-  CHURN_FEATURES, WIN_FEATURES,
-  calculateAndSaveLeadScore, rescoreContact, rescoreDeal,
+  CHURN_FEATURES, WIN_FEATURES, MIN_CHANGE,
+  snapshot, leadScoreResult, calculateAndSaveLeadScore, rescoreContact, rescoreDeal,
   scoreChurn, scoreOpenDeals, scoreLeads, writeSnapshots,
 };
