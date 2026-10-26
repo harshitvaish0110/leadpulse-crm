@@ -14,13 +14,16 @@ router.use(
   limiter({ windowMs: 86_400_000, limit: Number(process.env.AI_RATE_PER_DAY) || 500, keyGenerator: perUser }),
 );
 
-router.post('/compose-email',    ctrl.composeEmail);
-router.post('/deal-summary/:id', ctrl.dealSummary);
-router.post('/smart-reply',      ctrl.smartReply);
-router.post('/next-action{/:id}', ctrl.nextAction);
-router.post('/enrich-contact',   ctrl.enrichContact);
-router.post('/chat',             ctrl.chat);
-router.get('/index/status',      requireRole('ADMIN'), ctrl.indexStatus);
-router.post('/index/rebuild',    requireRole('ADMIN'), ctrl.rebuildIndex);
+router.post('/compose-email',              ctrl.composeEmail);
+router.post('/deal-summary/:id',           ctrl.dealSummary);
+router.post('/contact-narrative/:id',      ctrl.contactNarrative);
+router.post('/smart-reply',                ctrl.smartReply);
+router.post('/next-action{/:id}',          ctrl.nextAction);
+router.post('/lead-score/:id/explain',     ctrl.explainLeadScore);
+router.post('/enrich-contact',             ctrl.enrichContact);
+router.post('/enrich-contact/:id/apply',   ctrl.applyEnrichment);
+router.post('/chat',                       ctrl.chat);
+router.get('/index/status',                requireRole('ADMIN'), ctrl.indexStatus);
+router.post('/index/rebuild',              requireRole('ADMIN'), ctrl.rebuildIndex);
 
 module.exports = router;

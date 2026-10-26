@@ -53,7 +53,10 @@ test("another rep's records are indistinguishable from missing ones", async () =
 
 test('AI endpoints apply the same scope', async () => {
   await request(app).post(`/api/ai/deal-summary/${emilyDeal.id}`).set(bearer(sarah.token)).expect(404);
-  await request(app).post('/api/ai/compose-email').set(bearer(sarah.token)).send({ contactId: emilyContact.id }).expect(404);
+  await request(app).post('/api/ai/compose-email').set(bearer(sarah.token)).send({ contactId: emilyContact.id, bulletPoints: ['Follow up'] }).expect(404);
+  await request(app).post(`/api/ai/contact-narrative/${emilyContact.id}`).set(bearer(sarah.token)).expect(404);
+  await request(app).post(`/api/ai/lead-score/${emilyContact.id}/explain`).set(bearer(sarah.token)).expect(404);
+  await request(app).post(`/api/ai/enrich-contact/${emilyContact.id}/apply`).set(bearer(sarah.token)).send({ fields: { title: 'x' } }).expect(404);
   await request(app).post('/api/ai/next-action').set(bearer(sarah.token)).send({ contactId: emilyContact.id }).expect(404);
   await request(app).post('/api/ai/enrich-contact').set(bearer(sarah.token)).send({ contactId: emilyContact.id }).expect(404);
 });
