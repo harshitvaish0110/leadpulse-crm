@@ -21,6 +21,11 @@
  * PUT    /api/settings/custom-fields/order          ADMIN  { entity, ids }
  * PATCH  /api/settings/custom-fields/:id            ADMIN  { label?, options?, required? }
  * DELETE /api/settings/custom-fields/:id            ADMIN  also clears its values
+ *
+ * GET    /api/settings/integrations                 ADMIN  key sources (never values), email, AI usage
+ * PUT    /api/settings/integrations/:id             ADMIN  { apiKey } — stored encrypted
+ * DELETE /api/settings/integrations/:id             ADMIN
+ * POST   /api/settings/integrations/:id/test        ADMIN  { apiKey? }; also `email` and `ml`
  */
 
 'use strict';
@@ -29,6 +34,7 @@ const { Router } = require('express');
 const { authenticate, requireRole } = require('../middleware/auth.middleware');
 const settings = require('../services/settings.service');
 const customFields = require('../services/customFields.service');
+const integrations = require('../services/integrations.service');
 
 const router = Router();
 router.use(authenticate);
@@ -85,6 +91,21 @@ router.patch('/custom-fields/:id', admin, async (req, res) => {
 });
 router.delete('/custom-fields/:id', admin, async (req, res) => {
   res.json({ success: true, ...(await customFields.removeField(req, req.params.id)) });
+});
+
+router.get('/integrations', admin, async (_req, res) => {
+  res.json({ success: true, ...(await integrations.integrationStatus()) });
+});
+router.put('/integrations/:id', admin, async (req, res) => {
+  await integrations.saveKey(req, req.params.id, body(req).apiKey);
+  res.json({ success: true, ...(await integrations.integrationStatus()) });
+});
+router.delete('/integrations/:id', admin, async (req, res) => {
+  await integrations.removeKey(req, req.params.id);
+  res.json({ success: true, ...(await integrations.integrationStatus()) });
+});
+router.post('/integrations/:id/test', admin, async (req, res) => {
+  res.json({ success: true, result: await integrations.testIntegration(req, req.params.id, body(req).apiKey) });
 });
 
 module.exports = router;
