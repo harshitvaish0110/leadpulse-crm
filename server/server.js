@@ -1,66 +1,67 @@
 /**
- * LeadPulse CRM — Server Entry Point
+ * LeadPulse CRM — API entry point.
  *
- * Creates the HTTP server, attaches Socket.IO for real-time events,
- * registers cron jobs, and starts listening.
+ * Creates the HTTP server, attaches Socket.IO and starts listening. Background
+ * jobs run in the separate worker process (worker.js), or in this process when
+ * WORKER_INLINE=true (hosts without background workers).
  */
 
 'use strict';
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env'), quiet: true });
 
-const http    = require('http');
+const http = require('http');
 
-const { createApp }   = require('./src/app');
-const { prisma }      = require('./src/lib/prisma');
-const { validateEnv } = require('./src/lib/env');
-const { attachSocket } = require('./src/lib/realtime');
+const { createApp }    = require('./src/app');
+const { prisma }       = require('./src/lib/prisma');
+const { logger }       = require('./src/lib/logger');
+const { redis, closeRedis } = require('./src/lib/redis');
+const { validateEnv }  = require('./src/lib/env');
+const { attachSocket, closeSocket } = require('./src/lib/realtime');
+const { closeQueue }   = require('./src/queues/queue');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 async function bootstrap() {
   // ── Fail fast on missing/weak configuration ─────────────────────────────────
   const { errors, warnings } = validateEnv();
-  warnings.forEach((w) => console.warn(`⚠  ${w}`));
+  warnings.forEach((w) => logger.warn({ event: 'config_warning' }, w));
   if (errors.length) {
-    errors.forEach((e) => console.error(`✗  ${e}`));
+    errors.forEach((e) => logger.fatal({ event: 'config_error' }, e));
     process.exit(1);
   }
 
   // ── Verify DB connectivity before accepting traffic ─────────────────────────
   try {
-    await prisma.$queryRawUnsafe('SELECT 1');
-    console.log('✓  Database connected');
+    await prisma.$queryRaw`SELECT 1`;
   } catch (err) {
-    console.error('✗  Database connection failed:', err.message);
+    logger.fatal({ event: 'db_unavailable', err: err.message }, 'Database connection failed');
     process.exit(1);
   }
 
+  redis(); // connect early, so the first requests can already queue jobs
+
   const app    = createApp();
   const server = http.createServer(app);
-
-  // ── Socket.IO (JWT handshake, server-side rooms) ─────────────────────────────
   attachSocket(server);
 
-  // ── Start listening ─────────────────────────────────────────────────────────
-  server.listen(PORT, () => {
-    console.log(`\n🚀  LeadPulse server running at http://localhost:${PORT}`);
-    console.log(`    Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`    Health:      http://localhost:${PORT}/health\n`);
+  const worker = process.env.WORKER_INLINE === 'true' && process.env.NODE_ENV !== 'test'
+    ? require('./src/queues/worker').startWorker()
+    : null;
 
-    // Register background jobs after the server is up (not in tests).
-    if (process.env.NODE_ENV !== 'test') require('./src/jobs/scoring.job').startScoringSchedule();
+  server.listen(PORT, () => {
+    logger.info({ event: 'api_started', port: PORT, env: process.env.NODE_ENV || 'development', inlineWorker: Boolean(worker) }, `LeadPulse API listening on http://localhost:${PORT}`);
   });
 
   // ── Graceful shutdown ───────────────────────────────────────────────────────
   const shutdown = async (signal) => {
-    console.log(`\n[${signal}] Shutting down gracefully…`);
-    server.close(() => {
-      console.log('HTTP server closed.');
-      process.exit(0);
-    });
-    // Force-close after 10s if still hanging
-    setTimeout(() => process.exit(1), 10_000);
+    logger.info({ event: 'shutdown', signal }, 'Shutting down');
+    setTimeout(() => process.exit(1), 10_000).unref();
+    server.close();
+    await worker?.close().catch(() => {});
+    await Promise.allSettled([closeSocket(), closeQueue()]);
+    await closeRedis();
+    process.exit(0);
   };
 
   process.on('SIGINT',  () => shutdown('SIGINT'));
@@ -68,6 +69,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  console.error('Fatal bootstrap error:', err);
+  logger.fatal({ err }, 'Fatal bootstrap error');
   process.exit(1);
 });

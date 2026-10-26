@@ -11,6 +11,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.e
 const request = require('supertest');
 const { createApp } = require('../../src/app');
 const { prisma, pool } = require('../../src/lib/prisma');
+const { closeRedis } = require('../../src/lib/redis');
 
 const app = createApp();
 const startedAt = new Date();
@@ -30,11 +31,12 @@ function refreshCookie(res) {
   return raw ? raw.split(';')[0] : null;
 }
 
-/** Removes refresh tokens created by this test file, then closes the pool. */
+/** Removes refresh tokens created by this test file, then closes the pool and any Redis connection. */
 async function teardown() {
   await prisma.refreshToken.deleteMany({ where: { createdAt: { gte: startedAt } } });
   await prisma.$disconnect();
   await pool.end().catch(() => {});
+  await closeRedis();
 }
 
 module.exports = { app, request, prisma, bearer, login, refreshCookie, teardown };

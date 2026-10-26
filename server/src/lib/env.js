@@ -26,7 +26,10 @@ function validateEnv(env = process.env) {
   if (env.NODE_ENV === 'production') {
     if (!env.ML_SERVICE_TOKEN) errors.push('ML_SERVICE_TOKEN is required in production');
     if (!env.CORS_ORIGINS && !env.CLIENT_URL) errors.push('CORS_ORIGINS is required in production');
+    if (!env.INTERNAL_JOB_TOKEN) errors.push('INTERNAL_JOB_TOKEN is required in production (it protects the nightly job trigger)');
   }
+
+  if (!env.REDIS_URL) warnings.push('REDIS_URL is not set — background jobs run inside the API process, without retries');
 
   if (!AI_PROVIDER_KEYS.some((k) => env[k]) && env.AI_MOCK !== 'true') {
     warnings.push(`No AI provider key set (${AI_PROVIDER_KEYS.join(', ')}) — AI features will be unavailable`);
