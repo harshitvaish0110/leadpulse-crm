@@ -42,6 +42,20 @@ export function formatDate(value, { dateOnly = false, ...options } = {}) {
   });
 }
 
+const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+const STEPS = [['year', 31_536_000], ['month', 2_592_000], ['week', 604_800], ['day', 86_400], ['hour', 3_600], ['minute', 60]];
+
+/** "just now", "5 minutes ago", "yesterday", "2 weeks ago". */
+export function timeAgo(value, now = Date.now()) {
+  const t = new Date(value).getTime();
+  if (Number.isNaN(t)) return '';
+  const seconds = Math.round((t - now) / 1000);
+  for (const [unit, size] of STEPS) {
+    if (Math.abs(seconds) >= size) return relative.format(Math.trunc(seconds / size), unit);
+  }
+  return 'just now';
+}
+
 /** "LEAD" → "Lead", "CLOSED_WON" → "Closed won". */
 export function humanize(value) {
   if (!value) return '';

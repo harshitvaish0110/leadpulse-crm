@@ -12,6 +12,7 @@ import Skeleton from '../ui/Skeleton';
 import EmailComposer from '../ai/EmailComposer';
 import SmartReplyBar from '../ai/SmartReplyBar';
 import { formatDate } from '../../lib/format';
+import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
 
 const STATUS_VARIANT = { DRAFT: 'gray', SENT: 'green', FAILED: 'red', RECEIVED: 'blue' };
@@ -66,8 +67,8 @@ function EmailItem({ email, onEdit, onSend, onDelete, sending }) {
 
 export default function ContactEmails({ contactId, contactName }) {
   const qc = useQueryClient();
-  const key = ['emails', 'thread', contactId];
-  const [dialog, setDialog] = useState(null); // 'new' | 'received' | { edit: email }
+  const key = qk.emails.thread(contactId);
+  const [dialog, setDialog] = useState(null); // 'new' | 'received' | { edit: email } | { reply: { subject, body, tone } }
   const [composing, setComposing] = useState(false);
 
   const { data: emails = [], isLoading } = useQuery({
@@ -127,19 +128,22 @@ export default function ContactEmails({ contactId, contactName }) {
       {latestInbound && (
         <div className="bg-white border border-gray-100 rounded-xl p-4">
           <SmartReplyBar
-            emailThread={`Subject: ${latestInbound.subject || ''}\n\n${latestInbound.body}`}
+            key={latestInbound.id}
+            email={latestInbound}
             contactId={contactId}
-            onUseReply={(reply) => create.mutate({ subject: latestInbound.subject ? `Re: ${latestInbound.subject.replace(/^re:\s*/i, '')}` : '', body: reply, aiGenerated: true })}
+            onUseReply={(body, tone) => setDialog({
+              reply: { subject: latestInbound.subject ? `Re: ${latestInbound.subject.replace(/^re:\s*/i, '')}` : '', body, tone },
+            })}
           />
         </div>
       )}
 
       <Modal isOpen={Boolean(dialog)} onClose={() => setDialog(null)} size="lg"
-        title={dialog === 'received' ? 'Log received email' : dialog?.edit ? 'Edit draft' : 'New draft'}>
+        title={dialog === 'received' ? 'Log received email' : dialog?.edit ? 'Edit draft' : dialog?.reply ? 'Reply' : 'New draft'}>
         {dialog && (
           <EmailForm
-            key={dialog.edit?.id ?? dialog}
-            initial={dialog.edit}
+            key={dialog.edit?.id ?? (dialog.reply ? 'reply' : dialog)}
+            initial={dialog.edit ?? dialog.reply}
             withReceivedAt={dialog === 'received'}
             submitLabel={dialog === 'received' ? 'Log email' : 'Save draft'}
             busy={create.isPending || update.isPending}
@@ -147,6 +151,7 @@ export default function ContactEmails({ contactId, contactName }) {
             onSubmit={({ subject, body, receivedAt }) => {
               if (dialog.edit) update.mutate({ id: dialog.edit.id, subject, body });
               else if (dialog === 'received') create.mutate({ direction: 'INBOUND', subject, body, receivedAt: receivedAt ? new Date(receivedAt).toISOString() : undefined });
+              else if (dialog.reply) create.mutate({ subject, body, aiGenerated: true, tone: dialog.reply.tone });
               else create.mutate({ subject, body });
             }}
           />
@@ -154,8 +159,7 @@ export default function ContactEmails({ contactId, contactName }) {
       </Modal>
 
       <SlideOver isOpen={composing} onClose={() => setComposing(false)} title="Compose with AI" width="sm:max-w-lg">
-        <EmailComposer contactId={contactId}
-          onEmailReady={(subject, body) => create.mutate({ subject, body, aiGenerated: true })} />
+        {composing && <EmailComposer contactId={contactId} onSaved={() => setComposing(false)} />}
       </SlideOver>
     </div>
   );
