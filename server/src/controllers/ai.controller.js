@@ -16,6 +16,8 @@ const scoring = require('../services/scoring.service');
 const enrichment = require('../services/enrichment.service');
 const semanticIndex = require('../services/semanticIndex.service');
 const { recommendNextAction } = require('../services/nextAction.service');
+const chatService = require('../services/chat.service');
+const actionsService = require('../services/actions.service');
 const { DEAL_STAGES } = require('../services/deals.service');
 const { enqueue } = require('../queues/queue');
 const { ApiError } = require('../middleware/error.middleware');
@@ -39,13 +41,46 @@ function checkTone(tone, allowed) {
   return tone;
 }
 
-/** POST /api/ai/chat { question } — SSE. */
+/** POST /api/ai/chat { conversationId?, question } — SSE: delta…, sources, actions?, done { conversationId, messageId }. */
 async function chat(req, res) {
   const question = String(req.body?.question ?? '').trim();
   if (!question) throw ApiError.badRequest('question is required');
   if (question.length > 2000) throw invalid('question', 'question is too long (max 2000 characters)');
+  await chatService.ask(req.user, { conversationId: req.body?.conversationId || null, question }, res);
+}
 
-  await ai.streamToResponse(res, prompts.chat({ question }), { log: { userId: req.user.id, input: { question } } });
+/** GET /api/ai/conversations — the caller's own, most recent first. */
+async function listConversations(req, res) {
+  res.json({ success: true, conversations: await chatService.listConversations(req.user) });
+}
+
+/** GET /api/ai/conversations/:id → { conversation: { …, messages, actions } } */
+async function getConversation(req, res) {
+  res.json({ success: true, conversation: await chatService.getConversation(req.user, req.params.id) });
+}
+
+async function deleteConversation(req, res) {
+  await chatService.deleteConversation(req.user, req.params.id);
+  res.status(204).end();
+}
+
+const ACTION_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'EXECUTED', 'FAILED'];
+
+/** GET /api/ai/actions?status= — the caller's proposals. */
+async function listActions(req, res) {
+  const status = req.query.status ? String(req.query.status).toUpperCase() : undefined;
+  if (status && !ACTION_STATUSES.includes(status)) throw invalid('status', `status must be one of: ${ACTION_STATUSES.join(', ')}`);
+  res.json({ success: true, actions: await actionsService.list(req.user, { status }) });
+}
+
+/** POST /api/ai/actions/:id/approve → { action } (EXECUTED or FAILED); 409 unless PENDING. */
+async function approveAction(req, res) {
+  res.json({ success: true, action: await actionsService.approve(req.user, req.params.id, req) });
+}
+
+/** POST /api/ai/actions/:id/reject { note? } → { action }; 409 unless PENDING. */
+async function rejectAction(req, res) {
+  res.json({ success: true, action: await actionsService.reject(req.user, req.params.id, req.body?.note, req) });
 }
 
 /**
@@ -212,6 +247,7 @@ async function rebuildIndex(_req, res) {
 }
 
 module.exports = {
-  chat, composeEmail, dealSummary, contactNarrative, smartReply, nextAction, explainLeadScore,
+  chat, listConversations, getConversation, deleteConversation, listActions, approveAction, rejectAction,
+  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, explainLeadScore,
   enrichContact, applyEnrichment, indexStatus, rebuildIndex,
 };

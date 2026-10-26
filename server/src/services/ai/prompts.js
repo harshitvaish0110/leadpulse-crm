@@ -285,22 +285,108 @@ Return JSON only: {"title": string|null, "company": string|null, "companySize": 
   };
 }
 
-// ── Assistant chat (no CRM retrieval yet) ──────────────────────────────────────
-function chat({ question }) {
+// ── Assistant chat over retrieved CRM records (streamed) ───────────────────────
+const NO_ANSWER = "I don't have that information in your CRM data.";
+
+/**
+ * @param {{ question: string, chunks: { content: string }[], history: { role: string, content: string }[], userName: string, today: string }} input
+ */
+function chatAnswer({ question, chunks, history = [], userName, today }) {
+  const records = chunks.map((c, i) => `[${i + 1}] ${c.content}`).join('\n');
   return {
     feature: 'chat',
     messages: [
-      { role: 'system', content: 'You are LeadPulse, a helpful CRM assistant. Answer questions about sales and CRM work. You cannot see this CRM\'s records yet; say so if asked about specific contacts or deals.' },
-      { role: 'user', content: `<question>\n${question}\n</question>` },
+      {
+        role: 'system',
+        content: `You are LeadPulse, the CRM assistant of ${userName}. Today is ${today}. `
+          + 'Answer only from the numbered records inside <crm_data>; cite each fact as [n]. '
+          + `If the records do not contain the answer, reply exactly: "${NO_ANSWER}" `
+          + 'You never change data yourself: when asked to do something (create a task, log an activity, move a deal, draft an email), '
+          + 'give the relevant facts and say the action is suggested below for them to approve. '
+          + 'Keep answers under 200 words unless asked for more. Plain text; short "- " bullet lists are fine.\n\n'
+          + SAFETY,
+      },
+      ...history.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: clip(m.content, 2000) })),
+      { role: 'user', content: `${crm(records)}\n<question>\n${question}\n</question>` },
     ],
+    maxTokens: 700,
+    temperature: 0.3,
+    mock: 'Here is what your CRM shows [1].',
+  };
+}
+
+// ── Actions the assistant may propose (JSON; stored as PENDING, never executed) ─
+const ACTION_KINDS = ['CREATE_TASK', 'LOG_ACTIVITY', 'UPDATE_DEAL_STAGE', 'DRAFT_EMAIL'];
+
+/** Proposals only when the user asked for something to be done; at most three. */
+function proposeActions({ question, answer, records, today }) {
+  const list = records.map((r, i) => `[${i + 1}] ${r.recordType} id=${r.recordId}${r.contactId && r.recordType !== 'contact' ? ` contactId=${r.contactId}` : ''}: ${clip(r.content, 300)}`).join('\n');
+  const firstContact = records.find((r) => r.recordType === 'contact') ?? records.find((r) => r.contactId);
+  const tomorrow = new Date(Date.parse(today.slice(0, 10)) + 86_400_000).toISOString().slice(0, 10);
+  return {
+    feature: 'propose_actions',
+    messages: messages(
+      'You turn a CRM user\'s request into proposed actions for them to approve. Propose an action only when the user asked for '
+      + 'something to be done (create a task, log an activity, move a deal, draft an email). Use ids from the records only. '
+      + 'If nothing was requested, return an empty list.',
+      `Today is ${today}.\n${crm(`Records:\n${list}\n\nAssistant answer: ${clip(answer, 1500)}`)}\n<question>\n${question}\n</question>
+Return JSON only: {"actions": [{"type": "CREATE_TASK", "payload": {"title": "...", "dueDate": "YYYY-MM-DD", "priority": "LOW|MEDIUM|HIGH", "contactId": "...", "dealId": "..."}, "rationale": "..."}]}
+Payloads: CREATE_TASK {title, description?, dueDate?, priority?, contactId?, dealId?}; LOG_ACTIVITY {type: CALL|EMAIL|MEETING|NOTE, contactId, dealId?, subject?, notes?};
+UPDATE_DEAL_STAGE {dealId, toStage: LEAD|CONTACTED|DEMO|PROPOSAL|NEGOTIATION|CLOSED_WON|CLOSED_LOST, lostReason?}; DRAFT_EMAIL {contactId, dealId?, subject, body}. At most 3 actions.`,
+    ),
+    maxTokens: 600,
+    temperature: 0.2,
+    json: true,
+    schema: '{"actions": [{"type": string, "payload": object, "rationale": string}]}',
+    normalise: (o) => ({
+      actions: (Array.isArray(o.actions) ? o.actions : [])
+        .filter((a) => a && ACTION_KINDS.includes(String(a.type).toUpperCase()) && a.payload && typeof a.payload === 'object')
+        .slice(0, 3)
+        .map((a) => ({ type: String(a.type).toUpperCase(), payload: a.payload, rationale: orNull(a.rationale, 300) })),
+    }),
+    mock: {
+      actions: firstContact && /\b(task|follow[- ]?up|remind)/i.test(question)
+        ? [{ type: 'CREATE_TASK', payload: { title: 'Follow up', dueDate: tomorrow, priority: 'MEDIUM', contactId: firstContact.recordType === 'contact' ? firstContact.recordId : firstContact.contactId }, rationale: 'You asked for a follow-up.' }]
+        : [],
+    },
+  };
+}
+
+// ── Call transcript → structured notes (JSON) ──────────────────────────────────
+const SENTIMENTS = ['POSITIVE', 'NEUTRAL', 'NEGATIVE', 'AT_RISK'];
+const items = (v, n = 10) => (Array.isArray(v) ? v.map((x) => clip(x, 200)).filter(Boolean).slice(0, n) : []);
+
+function transcriptExtract({ transcript }) {
+  return {
+    feature: 'transcript_extract',
+    messages: messages(
+      'You turn sales call transcripts into CRM notes. Use only what was said; leave lists empty rather than guessing.',
+      `${crm(clip(transcript, 12_000))}
+Return JSON only: {"summary": "3 sentences", "actionItems": ["..."], "sentiment": "POSITIVE|NEUTRAL|NEGATIVE|AT_RISK", "pricingMentions": ["..."], "objections": ["..."], "keyTopics": ["..."], "nextSteps": "..."}`,
+    ),
     maxTokens: 800,
-    temperature: 0.5,
-    mock: 'I can help with sales questions. I cannot see your CRM records yet.',
+    temperature: 0.2,
+    json: true,
+    schema: '{"summary": string, "actionItems": string[], "sentiment": string, "pricingMentions": string[], "objections": string[], "keyTopics": string[], "nextSteps": string}',
+    normalise: (o) => ({
+      summary: text(o.summary, 'summary', 600),
+      actionItems: items(o.actionItems),
+      sentiment: SENTIMENTS.includes(String(o.sentiment).toUpperCase()) ? String(o.sentiment).toUpperCase() : null,
+      pricingMentions: items(o.pricingMentions),
+      objections: items(o.objections),
+      keyTopics: items(o.keyTopics, 8),
+      nextSteps: orNull(o.nextSteps, 300),
+    }),
+    mock: {
+      summary: 'The customer reviewed the proposal and asked about onboarding. They want a decision by month end. Pricing was discussed briefly.',
+      actionItems: ['Send the onboarding plan'], sentiment: 'POSITIVE', pricingMentions: ['Annual plan'], objections: [], keyTopics: ['onboarding', 'pricing'],
+      nextSteps: 'Follow up on Friday.',
+    },
   };
 }
 
 module.exports = {
-  SAFETY, crm, EMAIL_TONES, REPLY_TONES, ACTION_TYPES, DEAL_SECTIONS, BUDGET_TIERS,
-  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, leadExplain, enrich, chat,
+  SAFETY, NO_ANSWER, crm, EMAIL_TONES, REPLY_TONES, ACTION_TYPES, ACTION_KINDS, DEAL_SECTIONS, BUDGET_TIERS,
+  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, leadExplain, enrich, chatAnswer, proposeActions, transcriptExtract,
   cleanReply, cleanExplanation,
 };
