@@ -11,7 +11,9 @@
 'use strict';
 
 const crypto = require('crypto');
+const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
+const { logger } = require('../lib/logger');
 const { ml } = require('../lib/mlClient');
 const { isPrivileged } = require('../middleware/auth.middleware');
 
@@ -22,6 +24,10 @@ const EMBED_BATCH = 32;
 const SPLIT_OVER = 1500;
 const WINDOW = 1000;
 const OVERLAP = 200;
+// Cosine similarity below this is noise: gibberish scores about 0.27, real questions 0.38 and up.
+const MIN_SIMILARITY = 0.33;
+// A word in at most this share of records (a name, a product) is what a question is about.
+const RARE_SHARE = 0.02;
 
 // ── Text templates ─────────────────────────────────────────────────────────────
 const fullName = (p) => (p ? `${p.firstName} ${p.lastName}` : 'unassigned');
@@ -224,12 +230,21 @@ async function removeOrphans() {
  * Hybrid retrieval: top 30 by cosine distance and top 30 by full-text rank,
  * fused with RRF (k = 60), best chunk per record. Only rows whose record still
  * exists and is in the caller's scope (same rules as scopeFor) are considered.
+ * Without a vector (the ML service is down) only the full-text half runs.
+ * Nearest neighbours below MIN_SIMILARITY are dropped, so a question with nothing
+ * relevant retrieves nothing.
  * @returns {Promise<{ recordType: string, recordId: string, chunkIndex: number, content: string, score: number }[]>}
  */
 async function retrieve(user, vector, query, limit = 6) {
   const privileged = isPrivileged(user);
   const uid = user.id;
-  const v = vectorLiteral(vector);
+  const terms = await keywordTerms(query);
+  const v = vector ? vectorLiteral(vector) : null;
+  const vec = v
+    ? Prisma.sql`SELECT "id", ROW_NUMBER() OVER (ORDER BY "vector" <=> ${v}::vector) AS r
+      FROM scoped WHERE "vector" IS NOT NULL AND ("vector" <=> ${v}::vector) <= ${1 - MIN_SIMILARITY}
+      ORDER BY "vector" <=> ${v}::vector LIMIT 30`
+    : Prisma.sql`SELECT "id", 0::bigint AS r FROM scoped WHERE false`;
   const rows = await prisma.$queryRaw`
     WITH scoped AS (
       SELECT e."id", e."vector", e."contentTsv" FROM "embeddings" e
@@ -241,14 +256,10 @@ async function retrieve(user, vector, query, limit = 6) {
          OR (e."recordType" = 'activity' AND EXISTS (SELECT 1 FROM "activities" a JOIN "contacts" c ON c."id" = a."contactId"
                                                     WHERE a."id" = e."recordId" AND (${privileged} OR a."userId" = ${uid} OR c."ownerId" = ${uid})))
     ),
-    vec AS (
-      SELECT "id", ROW_NUMBER() OVER (ORDER BY "vector" <=> ${v}::vector) AS r
-      FROM scoped WHERE "vector" IS NOT NULL
-      ORDER BY "vector" <=> ${v}::vector LIMIT 30
-    ),
+    vec AS (${vec}),
     kw AS (
       SELECT s."id", ROW_NUMBER() OVER (ORDER BY ts_rank_cd(s."contentTsv", q) DESC) AS r
-      FROM scoped s, websearch_to_tsquery('english', ${query}) q
+      FROM scoped s, websearch_to_tsquery('english', ${terms}) q
       WHERE s."contentTsv" @@ q
       ORDER BY ts_rank_cd(s."contentTsv", q) DESC LIMIT 30
     ),
@@ -269,9 +280,32 @@ async function retrieve(user, vector, query, limit = 6) {
   }).slice(0, limit);
 }
 
-/** Embeds the question, then retrieve(). */
+/**
+ * The words of a question that the full-text half searches for, OR-ed (a question
+ * rarely contains every word of a record). If some of them are rare in the index
+ * (names, products), only those are used: full-text rank has no notion of rarity,
+ * so common words like "renewal" would otherwise outweigh the one that matters.
+ */
+async function keywordTerms(query) {
+  const words = [...new Set(String(query).toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [])].slice(0, 24);
+  if (!words.length) return '';
+  const counts = await prisma.$queryRaw`
+    SELECT t.term, (SELECT COUNT(*) FROM "embeddings" e WHERE e."contentTsv" @@ plainto_tsquery('english', t.term))::int AS df,
+           (SELECT COUNT(*) FROM "embeddings")::int AS total
+    FROM unnest(${words}::text[]) AS t(term)`;
+  const present = counts.filter((c) => c.df > 0); // stop words and unknown words match nothing
+  const rare = present.filter((c) => c.df <= Math.max(5, c.total * RARE_SHARE));
+  return (rare.length ? rare : present).map((c) => c.term).join(' or ');
+}
+
+/** Embeds the question, then retrieve(); falls back to full-text search if embedding fails. */
 async function search(user, query, { limit = 6 } = {}) {
-  const [vector] = await embed([String(query).slice(0, 2000)]);
+  let vector = null;
+  try {
+    [vector] = await embed([String(query).slice(0, 2000)]);
+  } catch (err) {
+    logger.warn({ event: 'embed_failed', err: err.message }, 'Question not embedded; searching by keywords only');
+  }
   return retrieve(user, vector, query, limit);
 }
 
