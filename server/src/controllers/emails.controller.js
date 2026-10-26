@@ -10,14 +10,8 @@ const { prisma } = require('../lib/prisma');
 const { sendEmail } = require('../lib/mailer');
 const { ApiError } = require('../middleware/error.middleware');
 const { scoped, scopeFor } = require('../middleware/auth.middleware');
-const { assertParents, logActivity } = require('../services/activities.service');
-const { emitScoped } = require('../lib/realtime');
-
-const EMAIL_SELECT = {
-  id: true, direction: true, status: true, subject: true, body: true, aiGenerated: true, tone: true,
-  sentAt: true, receivedAt: true, createdAt: true, updatedAt: true, contactId: true, dealId: true,
-  createdBy: { select: { id: true, firstName: true, lastName: true } },
-};
+const { logActivity } = require('../services/activities.service');
+const { EMAIL_SELECT, createEmail } = require('../services/emails.service');
 
 const invalid = (path, msg) => ApiError.validation([{ path, msg }]);
 
@@ -47,33 +41,7 @@ async function list(req, res) {
  * OUTBOUND starts as a DRAFT; INBOUND is a logged received email.
  */
 async function create(req, res) {
-  const { contactId, dealId, subject, body, aiGenerated, tone } = req.body ?? {};
-  const direction = req.body?.direction ?? 'OUTBOUND';
-  if (!['OUTBOUND', 'INBOUND'].includes(direction)) throw invalid('direction', 'direction must be OUTBOUND or INBOUND');
-  if (!String(body ?? '').trim()) throw invalid('body', 'body is required');
-  const contact = await assertParents(req.user, contactId, dealId);
-
-  let receivedAt = null;
-  if (direction === 'INBOUND') {
-    receivedAt = req.body?.receivedAt ? new Date(req.body.receivedAt) : new Date();
-    if (Number.isNaN(receivedAt.getTime())) throw invalid('receivedAt', 'receivedAt must be a date');
-  }
-
-  const email = await prisma.emailDraft.create({
-    data: {
-      contactId, dealId: dealId || null, direction,
-      status:      direction === 'INBOUND' ? 'RECEIVED' : 'DRAFT',
-      subject:     String(subject ?? '').trim() || null,
-      body:        String(body).trim(),
-      aiGenerated: Boolean(aiGenerated),
-      tone:        tone || null,
-      receivedAt,
-      createdById: req.user.id,
-    },
-    select: EMAIL_SELECT,
-  });
-  emitScoped([req.user.id, contact.ownerId], 'email:created', { emailId: email.id, contactId });
-  res.status(201).json({ success: true, email });
+  res.status(201).json({ success: true, email: await createEmail(req.user, req.body ?? {}) });
 }
 
 /** PATCH /api/emails/:id — subject/body of a DRAFT only. */
