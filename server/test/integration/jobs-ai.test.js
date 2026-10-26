@@ -7,7 +7,7 @@
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { app, request, prisma, bearer, login, teardown } = require('./helpers');
+const { app, request, prisma, bearer, login, eventually, teardown } = require('./helpers');
 const { recorded } = require('../../src/queues/queue');
 const { retrieve } = require('../../src/services/semanticIndex.service');
 
@@ -126,7 +126,7 @@ test('AI endpoints answer through the gateway (mock provider) and log each call'
   await as(sarah).post('/api/ai/compose-email', { contactId: mikeContact.id, bulletPoints: ['x'] }).expect(404);
   await as(sarah).post('/api/ai/compose-email', { contactId: sarahContact.id, bulletPoints: ['x'], tone: 'rude' }).expect(422);
 
-  const log = await prisma.aiLog.findFirst({ where: { feature: 'compose_email', userId: sarah.user.id, createdAt: { gte: startedAt } } });
+  const log = await eventually(() => prisma.aiLog.findFirst({ where: { feature: 'compose_email', userId: sarah.user.id, createdAt: { gte: startedAt } } }));
   assert.equal(log?.provider, 'mock');
   assert.equal(log?.status, 'ok');
 });

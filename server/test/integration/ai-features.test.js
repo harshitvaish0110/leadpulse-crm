@@ -8,7 +8,7 @@
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { app, request, prisma, bearer, login, teardown } = require('./helpers');
+const { app, request, prisma, bearer, login, eventually, teardown } = require('./helpers');
 const { Prisma } = require('@prisma/client');
 const { refreshNextActions } = require('../../src/services/nextAction.service');
 
@@ -104,7 +104,7 @@ test('a smart reply answers a received email only, and records the tone', async 
   await as(sarah).post('/api/ai/smart-reply', { contactId: mikeContact.id, emailId: received.id, tone: 'casual' }).expect(404);
   await as(mike).post('/api/ai/smart-reply', { emailId: received.id, tone: 'casual' }).expect(404);
 
-  const log = await prisma.aiLog.findFirst({ where: { feature: 'smart_reply', userId: sarah.user.id, createdAt: { gte: startedAt } }, orderBy: { createdAt: 'desc' } });
+  const log = await eventually(() => prisma.aiLog.findFirst({ where: { feature: 'smart_reply', userId: sarah.user.id, createdAt: { gte: startedAt }, input: { path: ['tone'], equals: 'urgent' } } }));
   assert.deepEqual(log.input, { tone: 'urgent', emailId: received.id });
 });
 
@@ -125,7 +125,7 @@ test('a next best action is stored on the contact with its time', async () => {
 test('the nightly batch refreshes due recommendations and spares fresh ones', async () => {
   const due = await prisma.contact.findFirst({
     where: { status: { in: ['LEAD', 'ACTIVE'] }, leadScoreLabel: { in: ['HOT', 'WARM'] }, OR: [{ nextBestActionAt: null }, { nextBestActionAt: { lt: new Date(Date.now() - 3 * 86_400_000) } }] },
-    orderBy: { leadScore: 'desc' },
+    orderBy: [{ leadScore: 'desc' }, { id: 'asc' }], // the same tie-break as the batch
     select: { id: true, nextBestAction: true, nextBestActionAt: true },
   });
   if (!due) return; // every recommendation is fresh; nothing to refresh

@@ -62,7 +62,7 @@ async function refreshNextActions({ limit = Number(process.env.NBA_BATCH_SIZE) |
       leadScoreLabel: { in: ['HOT', 'WARM'] },
       OR: [{ nextBestActionAt: null }, { nextBestActionAt: { lt: cutoff } }],
     },
-    orderBy: { leadScore: 'desc' },
+    orderBy: [{ leadScore: 'desc' }, { id: 'asc' }], // many contacts share a score; keep the pick stable
     take: limit,
     select: { id: true },
   });
