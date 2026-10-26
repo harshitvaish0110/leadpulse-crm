@@ -49,10 +49,17 @@ const Card = ({ title, sub, children, className = '' }) => (
 );
 
 function RevenueCard() {
-  const { data, isLoading } = useQuery({ queryKey: qk.analytics.report('revenue'), queryFn: () => getRevenue().then(r => r.data) });
+  const { data, isLoading } = useQuery({
+    queryKey: qk.analytics.report('revenue'),
+    queryFn: () => getRevenue().then(r => r.data),
+    // The forecast is computed in the background; check back until it is ready.
+    refetchInterval: (query) => (query.state.data?.forecastSource === 'pending' ? 30_000 : false),
+  });
   return (
     <Card title="Revenue" sub="Last 12 months, with a 3-month forecast" className="xl:col-span-3">
-      {isLoading ? <Skeleton className="h-56 w-full" /> : <RevenueForecastChart historical={data?.historical} forecast={data?.forecast} />}
+      {isLoading ? <Skeleton className="h-56 w-full" /> : (
+        <RevenueForecastChart historical={data?.historical} forecast={data?.forecast} pipeline={data?.pipeline} forecastSource={data?.forecastSource} />
+      )}
     </Card>
   );
 }

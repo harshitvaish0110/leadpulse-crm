@@ -11,7 +11,7 @@
 const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 const { scoped, isPrivileged } = require('../middleware/auth.middleware');
-const { forecastRevenue } = require('../services/forecast.service');
+const { getForecast, weightedPipeline, monthStart } = require('../services/forecast.service');
 
 const DAY_MS = 86_400_000;
 const OPEN_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION'];
@@ -98,12 +98,18 @@ async function revenue(req, res) {
   const totalRevenue = historical.reduce((s, m) => s + m.y, 0);
   const avgMonthly = historical.length ? Math.round(totalRevenue / historical.length) : 0;
 
-  // The current month is still in progress, so the model learns from complete months
-  // only; one extra period covers the current month, leaving three months ahead.
-  const currentMonth = `${monthKey(new Date())}-01`;
-  const { forecast, source } = await forecastRevenue(historical.filter((m) => m.ds < currentMonth), 4);
+  // The forecast continues from today, so it is only shown when the range reaches this month.
+  // It is computed in the background; until then `forecastSource` is 'pending'.
+  const now = new Date();
+  const reachesNow = to >= monthStart(now);
+  const [prediction, pipeline] = reachesNow
+    ? await Promise.all([getForecast(req.user, now), weightedPipeline(req.user, now)])
+    : [{ forecast: [], source: 'none' }, []];
 
-  res.json({ success: true, historical, forecast, forecastSource: source, totalRevenue, avgMonthly });
+  res.json({
+    success: true, historical, totalRevenue, avgMonthly, pipeline,
+    forecast: prediction.forecast, forecastSource: prediction.source, forecastGeneratedAt: prediction.generatedAt ?? null,
+  });
 }
 
 /**

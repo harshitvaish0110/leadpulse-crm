@@ -27,12 +27,16 @@ function resolveRange(range) {
   return { from: day(new Date(now.getTime() - days * 86_400_000)), to: day(now) };
 }
 
-function useReport(name, range) {
+function useReport(name, range, options) {
   return useQuery({
     queryKey: qk.analytics.report(name, range),
     queryFn: () => api.get(`/api/analytics/${name}`, { params: range }).then((r) => r.data),
+    ...options,
   });
 }
+
+// The forecast is computed in the background; check back until it is ready.
+const whilePending = { refetchInterval: (query) => (query.state.data?.forecastSource === 'pending' ? 30_000 : false) };
 
 function StatCard({ label, value, sub, icon: Icon, color = 'indigo' }) {
   const bg = { indigo: 'bg-indigo-50 text-indigo-600', green: 'bg-green-50 text-green-600', amber: 'bg-amber-50 text-amber-600', purple: 'bg-purple-50 text-purple-600' };
@@ -65,7 +69,7 @@ export default function Analytics() {
   const custom = rangeKey.startsWith('custom:');
   const rangeLabel = `${formatDate(`${range.from}T00:00:00Z`, { dateOnly: true })} – ${formatDate(`${range.to}T00:00:00Z`, { dateOnly: true })}`;
 
-  const revenue = useReport('revenue', range);
+  const revenue = useReport('revenue', range, whilePending);
   const pipeline = useReport('pipeline', {});
   const winLoss = useReport('win-loss', range);
   const reps = useReport('rep-performance', range);
@@ -120,7 +124,8 @@ export default function Analytics() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <ErrorBoundary compact>
           <Panel title="Revenue" sub="Won deals per month, with a 3-month forecast" loading={revenue.isLoading} className="xl:col-span-2">
-            <RevenueForecastChart historical={revenue.data?.historical} forecast={revenue.data?.forecast} height={260} />
+            <RevenueForecastChart historical={revenue.data?.historical} forecast={revenue.data?.forecast}
+              pipeline={revenue.data?.pipeline} forecastSource={revenue.data?.forecastSource} height={260} />
           </Panel>
         </ErrorBoundary>
         <ErrorBoundary compact>
