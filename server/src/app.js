@@ -24,6 +24,7 @@ const emailRoutes      = require('./routes/emails.routes');
 const attachmentRoutes = require('./routes/attachments.routes');
 const notificationRoutes = require('./routes/notifications.routes');
 const internalRoutes   = require('./routes/internal.routes');
+const auditRoutes      = require('./routes/audit.routes');
 const storage          = require('./lib/storage');
 const { logger }       = require('./lib/logger');
 const { readiness }    = require('./lib/health');
@@ -104,6 +105,7 @@ function createApp() {
   app.use('/api/emails',     emailRoutes);
   app.use('/api/attachments', attachmentRoutes);
   app.use('/api/notifications', notificationRoutes);
+  app.use('/api/audit-logs', auditRoutes);
 
   // Signed, short-lived download links for private files (no auth header: links open in the browser).
   app.get('/api/files/*key', (req, res) => {
