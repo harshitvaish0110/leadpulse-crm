@@ -91,8 +91,12 @@ test('deals: the list view sorts by value from the column header', async ({ page
   await expect(page).toHaveURL(/sort=value%3Adesc|sort=value:desc/);
   const cells = page.getByRole('row').locator('td:nth-child(4)');
   await expect(cells.first()).toBeVisible();
-  const values = (await cells.allTextContents()).slice(0, 5).map((v) => Number(v.replace(/[$,K]/g, '').replace('M', '')) * (v.includes('M') ? 1e6 : v.includes('K') ? 1e3 : 1));
-  expect(values).toEqual([...values].sort((a, b) => b - a));
+  const amount = (v) => Number(v.replace(/[$,K]/g, '').replace('M', '')) * (v.includes('M') ? 1e6 : v.includes('K') ? 1e3 : 1);
+  // The previous page stays on screen until the sorted one arrives, so wait for the order to change.
+  await expect.poll(async () => {
+    const values = (await cells.allTextContents()).slice(0, 5).map(amount);
+    return values.length > 1 && values.every((v, i) => i === 0 || values[i - 1] >= v);
+  }).toBe(true);
 });
 
 test('analytics: the date range applies to the page and is kept in the URL', async ({ page }) => {
