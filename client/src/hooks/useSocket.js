@@ -52,16 +52,16 @@ export function useSocket() {
 
     // ── Data changes: keep open views current ───────────────────────────────
     ['deal:created', 'deal:updated', 'deal:deleted', 'deal:stage_changed', 'deal:score_updated'].forEach((event) => {
-      socket.on(event, () => refresh(qk.deals.all, qk.analytics.all));
+      socket.on(event, () => refresh(qk.deals.all, qk.analytics.all, qk.myDay));
     });
     ['activity:created', 'activity:updated', 'activity:deleted', 'activity:transcribed'].forEach((event) => {
       socket.on(event, () => refresh(qk.activities.all, qk.contacts.all));
     });
     ['contact:created', 'contact:updated', 'contact:deleted', 'contact:churn_alert'].forEach((event) => {
-      socket.on(event, () => refresh(qk.contacts.all, qk.analytics.all));
+      socket.on(event, () => refresh(qk.contacts.all, qk.analytics.all, qk.myDay));
     });
     ['task:assigned', 'task:due_soon', 'task:overdue'].forEach((event) => {
-      socket.on(event, () => refresh(qk.tasks.all));
+      socket.on(event, () => refresh(qk.tasks.all, qk.myDay));
     });
     socket.on('email:created', () => refresh(['emails']));
 
