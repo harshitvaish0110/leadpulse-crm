@@ -6,6 +6,7 @@
  *   smtp                   — nodemailer with SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS
  *   resend                 — HTTPS API (RESEND_API_KEY); use this where SMTP ports are blocked
  *   log    (test default)  — nothing leaves the process
+ * Without EMAIL_DRIVER, a Resend key (from .env or saved in Settings) selects resend.
  */
 
 'use strict';
@@ -13,8 +14,10 @@
 const { logger } = require('./logger');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
+const { secret } = require('./secrets');
 
-const driver = () => process.env.EMAIL_DRIVER || (process.env.NODE_ENV === 'test' ? 'log' : 'ethereal');
+const driver = () => process.env.EMAIL_DRIVER
+  || (process.env.NODE_ENV === 'test' ? 'log' : secret('RESEND_API_KEY') ? 'resend' : 'ethereal');
 const from = () => process.env.EMAIL_FROM || 'LeadPulse <noreply@leadpulse.dev>';
 
 let transportPromise = null;
@@ -51,7 +54,7 @@ async function sendEmail({ to, subject, text, html, replyTo }) {
   if (driver() === 'resend') {
     const { data } = await axios.post('https://api.resend.com/emails',
       { from: from(), to: [to], subject, text, html, reply_to: replyTo },
-      { headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` }, timeout: 15_000 });
+      { headers: { Authorization: `Bearer ${secret('RESEND_API_KEY')}` }, timeout: 15_000 });
     return { id: data?.id ?? null, previewUrl: null };
   }
 
@@ -61,4 +64,4 @@ async function sendEmail({ to, subject, text, html, replyTo }) {
   return { id: info.messageId ?? null, previewUrl };
 }
 
-module.exports = { sendEmail };
+module.exports = { sendEmail, emailDriver: driver, emailFrom: from };

@@ -23,12 +23,12 @@ const { enqueue } = require('../queues/queue');
 const triggers = require('../queues/triggers');
 const ai = require('./ai');
 const prompts = require('./ai/prompts');
+const { secret, keyedClient } = require('../lib/secrets');
 
 const MAX_CONCURRENT = 2; // Groq's free tier limits audio requests; keep a burst of uploads queued here
 const STUCK_AFTER_MS = 2 * 60_000;
 
-let client;
-const groq = () => (client ??= new Groq({ apiKey: process.env.GROQ_API_KEY, maxRetries: 0 }));
+const groq = keyedClient('GROQ_API_KEY', (apiKey) => new Groq({ apiKey, maxRetries: 0 }));
 
 let running = 0;
 const waiting = [];
@@ -68,7 +68,7 @@ async function transcribe(activityId, job) {
   const activity = await prisma.activity.findUnique({ where: { id: activityId }, select: SELECT });
   if (!activity?.audioKey) return { skipped: 'no recording' };
   if (activity.metadata?.status === 'done') return { skipped: 'already transcribed' };
-  if (!process.env.GROQ_API_KEY) return markFailed(activity, 'Transcription is not configured: add GROQ_API_KEY.');
+  if (!secret('GROQ_API_KEY')) return markFailed(activity, 'Transcription is not configured: add GROQ_API_KEY.');
 
   try {
     return await withSlot(async () => {

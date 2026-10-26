@@ -29,10 +29,16 @@ function validateEnv(env = process.env) {
     if (!env.INTERNAL_JOB_TOKEN) errors.push('INTERNAL_JOB_TOKEN is required in production (it protects the nightly job trigger)');
   }
 
+  if (!env.ENCRYPTION_KEY) {
+    warnings.push('ENCRYPTION_KEY is not set — API keys can only come from .env, and webhooks cannot be created');
+  } else if (Buffer.from(env.ENCRYPTION_KEY, 'base64').length !== 32) {
+    errors.push('ENCRYPTION_KEY must be 32 bytes, base64-encoded (e.g. openssl rand -base64 32)');
+  }
+
   if (!env.REDIS_URL) warnings.push('REDIS_URL is not set — background jobs run inside the API process, without retries');
 
   if (!AI_PROVIDER_KEYS.some((k) => env[k]) && env.AI_MOCK !== 'true') {
-    warnings.push(`No AI provider key set (${AI_PROVIDER_KEYS.join(', ')}) — AI features will be unavailable`);
+    warnings.push(`No AI provider key in the environment (${AI_PROVIDER_KEYS.join(', ')}) — AI features need one saved in Settings → Integrations`);
   }
 
   return { errors, warnings };
