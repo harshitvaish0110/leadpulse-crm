@@ -9,6 +9,7 @@ const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor, assertInScope, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
 const { emitToUsers } = require('../lib/realtime');
 const { notify } = require('../lib/notify');
+const webhooks = require('./webhooks.service');
 
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH'];
 const DAY_MS = 86_400_000;
@@ -128,11 +129,12 @@ async function deleteTask(user, taskId) {
  * flag is claimed with a conditional update, so overlapping runs can't alert twice.
  * Tasks overdue for more than a day when first seen (a backlog, or after
  * downtime) are marked without an alert — the Tasks page already lists them.
+ * Each overdue alert also goes to webhooks subscribed to `task.overdue`.
  */
 async function sendReminders(now = new Date()) {
   const soonCutoff = new Date(now.getTime() + DAY_MS);
   const staleCutoff = new Date(now.getTime() - DAY_MS);
-  const select = { id: true, title: true, dueDate: true, assignedToId: true };
+  const select = { id: true, title: true, dueDate: true, priority: true, assignedToId: true, contactId: true, dealId: true };
 
   const [dueSoon, overdue] = await Promise.all([
     prisma.task.findMany({ where: { completed: false, dueSoonNotifiedAt: null, dueDate: { gt: now, lte: soonCutoff } }, select }),
@@ -144,6 +146,7 @@ async function sendReminders(now = new Date()) {
     if (!count) return 0;
     emitToUsers([task.assignedToId], event, { taskId: task.id, title: task.title, dueDate: task.dueDate });
     await notify([task.assignedToId], { type: 'task', title, message, link: '/tasks', data: { taskId: task.id } });
+    if (event === 'task:overdue') webhooks.emit('task.overdue', { task: webhooks.taskPayload(task) });
     return 1;
   };
 

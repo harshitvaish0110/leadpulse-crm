@@ -46,6 +46,7 @@ services:
       DATABASE_URL: postgresql://leadpulse:leadpulse_secret@postgres:5432/leadpulse_db
       ML_SERVICE_URL: http://ml-service:5001
       REDIS_URL: redis://redis:6379
+      WEBHOOK_ALLOW_PRIVATE: "true"   # development: webhooks may target a receiver on this machine (ignored in production)
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,6 +70,7 @@ services:
       DATABASE_URL: postgresql://leadpulse:leadpulse_secret@postgres:5432/leadpulse_db
       ML_SERVICE_URL: http://ml-service:5001
       REDIS_URL: redis://redis:6379
+      WEBHOOK_ALLOW_PRIVATE: "true"
     depends_on:
       server:
         condition: service_started

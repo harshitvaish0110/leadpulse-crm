@@ -26,6 +26,13 @@
  * PUT    /api/settings/integrations/:id             ADMIN  { apiKey } — stored encrypted
  * DELETE /api/settings/integrations/:id             ADMIN
  * POST   /api/settings/integrations/:id/test        ADMIN  { apiKey? }; also `email` and `ml`
+ *
+ * GET    /api/settings/webhooks                     ADMIN
+ * POST   /api/settings/webhooks                     ADMIN  { url, events } → { webhook, secret } (secret shown once)
+ * PATCH  /api/settings/webhooks/:id                 ADMIN  { url?, events?, isActive? }
+ * POST   /api/settings/webhooks/:id/rotate-secret   ADMIN  → { secret }
+ * POST   /api/settings/webhooks/:id/test            ADMIN  sends a `ping` now → { delivery }
+ * DELETE /api/settings/webhooks/:id                 ADMIN
  */
 
 'use strict';
@@ -35,6 +42,7 @@ const { authenticate, requireRole } = require('../middleware/auth.middleware');
 const settings = require('../services/settings.service');
 const customFields = require('../services/customFields.service');
 const integrations = require('../services/integrations.service');
+const webhooks = require('../services/webhooks.service');
 
 const router = Router();
 router.use(authenticate);
@@ -106,6 +114,26 @@ router.delete('/integrations/:id', admin, async (req, res) => {
 });
 router.post('/integrations/:id/test', admin, async (req, res) => {
   res.json({ success: true, result: await integrations.testIntegration(req, req.params.id, body(req).apiKey) });
+});
+
+router.get('/webhooks', admin, async (_req, res) => {
+  res.json({ success: true, webhooks: await webhooks.listWebhooks(), events: webhooks.EVENTS });
+});
+router.post('/webhooks', admin, async (req, res) => {
+  res.status(201).json({ success: true, ...(await webhooks.createWebhook(req, body(req))) });
+});
+router.patch('/webhooks/:id', admin, async (req, res) => {
+  res.json({ success: true, webhook: await webhooks.updateWebhook(req, req.params.id, body(req)) });
+});
+router.post('/webhooks/:id/rotate-secret', admin, async (req, res) => {
+  res.json({ success: true, ...(await webhooks.rotateSecret(req, req.params.id)) });
+});
+router.post('/webhooks/:id/test', admin, async (req, res) => {
+  res.json({ success: true, delivery: await webhooks.sendTest(req, req.params.id) });
+});
+router.delete('/webhooks/:id', admin, async (req, res) => {
+  await webhooks.removeWebhook(req, req.params.id);
+  res.status(204).end();
 });
 
 module.exports = router;
