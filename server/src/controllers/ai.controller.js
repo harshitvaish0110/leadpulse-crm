@@ -22,6 +22,7 @@ const { DEAL_STAGES } = require('../services/deals.service');
 const { enqueue } = require('../queues/queue');
 const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor } = require('../middleware/auth.middleware');
+const myDay = require('../services/myDay.service');
 
 const RECENT_ACTIVITIES = { orderBy: { occurredAt: 'desc' }, select: { type: true, subject: true, notes: true, sentiment: true, occurredAt: true } };
 const EMAIL_FIELDS = { direction: true, subject: true, body: true, sentAt: true, receivedAt: true, createdAt: true };
@@ -246,8 +247,14 @@ async function rebuildIndex(_req, res) {
   res.status(202).json({ success: true, enqueued: ['reindex-all'] });
 }
 
+/** POST /api/ai/briefing — writes today's My Day briefing now (it is also written nightly). */
+async function briefing(req, res) {
+  const written = await myDay.generateBriefing(req.user);
+  res.json({ success: true, briefing: written, ...(!written && { reason: 'Nothing is due, closing or at risk in your book today.' }) });
+}
+
 module.exports = {
-  chat, listConversations, getConversation, deleteConversation, listActions, approveAction, rejectAction,
+  briefing, chat, listConversations, getConversation, deleteConversation, listActions, approveAction, rejectAction,
   composeEmail, dealSummary, contactNarrative, smartReply, nextAction, explainLeadScore,
   enrichContact, applyEnrichment, indexStatus, rebuildIndex,
 };

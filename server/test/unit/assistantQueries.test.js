@@ -44,7 +44,8 @@ test('days start at local midnight, across DST and far-east timezones', () => {
   assert.equal(dayBoundary('2026-10-26', 'Pacific/Kiritimati').toISOString(), '2026-10-25T10:00:00.000Z');
 });
 
-test('the planner mock understands "deals over N"', () => {
+test('the planner mock and the briefing tidy-up behave', () => {
   assert.deepEqual(prompts.planQueries({ question: 'deals above 1.5m', today: 'x' }).mock.queries, [{ tool: 'deals', minValue: 1500000, sort: 'value' }]);
   assert.deepEqual(prompts.planQueries({ question: 'who is Art?', today: 'x' }).mock.queries, []);
+  assert.equal(prompts.dailyBriefing({ userName: 'Sarah', today: 'x', facts: 'y' }).finish('Good morning, Sarah! Two tasks are overdue.'), 'Two tasks are overdue.');
 });

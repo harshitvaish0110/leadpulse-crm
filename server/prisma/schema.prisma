@@ -134,6 +134,7 @@ model User {
   attachments      Attachment[]
   aiConversations  AiConversation[]
   aiActionRequests AiActionRequest[]
+  dailyBriefings   DailyBriefing[]
 
   @@index([email])
   @@index([role])
@@ -549,6 +550,22 @@ model AiActionRequest {
 
   @@index([userId, status, createdAt])
   @@map("ai_action_requests")
+}
+
+/// The short AI-written start-of-day summary on My Day: one per user per workspace-local day.
+model DailyBriefing {
+  id        String   @id @default(uuid())
+  userId    String
+  /// YYYY-MM-DD in the workspace timezone
+  date      String
+  content   String
+  provider  String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@map("daily_briefings")
 }
 
 // ─── PLATFORM ────────────────────────────────────────────────────────────────
