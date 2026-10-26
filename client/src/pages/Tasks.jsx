@@ -20,12 +20,12 @@ import { useDirectory } from '../hooks/queries/lookups';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import { useAuthStore } from '../store/authStore';
 import toast from 'react-hot-toast';
+import { apiError } from '../lib/apiError';
 
 const PRIORITY_VARIANT = { HIGH: 'red', MEDIUM: 'amber', LOW: 'gray' };
 const PRIORITY_DOT = { HIGH: 'bg-red-500', MEDIUM: 'bg-amber-500', LOW: 'bg-gray-400' };
 const FILTER_DEFAULTS = { view: 'mine', mode: 'list', priority: '' };
 const control = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 function AddTaskForm({ onClose, defaultDue }) {
   const qc = useQueryClient();

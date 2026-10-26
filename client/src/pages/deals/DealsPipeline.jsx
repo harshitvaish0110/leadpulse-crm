@@ -24,11 +24,11 @@ import { useDirectory, usePipelineStages } from '../../hooks/queries/lookups';
 import { useUrlFilters } from '../../hooks/useUrlFilters';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
+import { apiError } from '../../lib/apiError';
 
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
 const FILTER_DEFAULTS = { view: 'kanban', q: '', owner: '', min: '', max: '', from: '', to: '', sort: 'createdAt:desc', page: '1' };
 const control = 'text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white';
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 const filterQuery = (f) => ({
   search: f.q || undefined, ownerId: f.owner || undefined,

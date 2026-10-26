@@ -30,6 +30,7 @@ import { qk } from '../../hooks/queries/keys';
 import { useDirectory } from '../../hooks/queries/lookups';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
+import { apiError } from '../../lib/apiError';
 
 const TABS = [
   ['overview', 'Overview'], ['activities', 'Activities'], ['deals', 'Deals'],
@@ -37,7 +38,6 @@ const TABS = [
 ];
 const EDITABLE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'title', 'status', 'linkedinUrl'];
 const field = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 function EditContactForm({ contact, onCancel, onSave, saving }) {
   const [form, setForm] = useState(() => ({

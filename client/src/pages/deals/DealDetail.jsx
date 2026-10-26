@@ -25,10 +25,10 @@ import { qk } from '../../hooks/queries/keys';
 import { useDirectory, usePipelineStages } from '../../hooks/queries/lookups';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
+import { apiError } from '../../lib/apiError';
 
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
 const field = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 /** @param {{ probability: number }} props 0–1 */
 function WinProbGauge({ probability = 0 }) {

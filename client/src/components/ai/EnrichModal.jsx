@@ -7,6 +7,7 @@ import Badge from '../ui/Badge';
 import api from '../../api/axiosInstance';
 import { formatPercent } from '../../lib/format';
 import toast from 'react-hot-toast';
+import { apiError } from '../../lib/apiError';
 
 const FIELDS = [
   ['title', 'Title'], ['company', 'Company'], ['companySize', 'Employees'], ['industry', 'Industry'],
@@ -14,7 +15,6 @@ const FIELDS = [
 ];
 const LINKEDIN = /^https:\/\/([a-z]{2,3}\.)?linkedin\.com\/in\/[A-Za-z0-9_%-]+\/?$/;
 const DOMAIN = /^(?:https?:\/\/)?(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\/?$/i;
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 const show = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 const differs = (proposed, current) => proposed !== null && proposed !== undefined && String(proposed) !== String(current ?? '');
