@@ -108,9 +108,10 @@ function createGateway({
 
   const params = (spec) => ({ maxTokens: spec.maxTokens ?? 600, temperature: spec.temperature ?? 0.5, mock: spec.mock });
 
-  /** @returns {Promise<{ text: string, provider: string, tokens: number }>} */
-  function getText(spec, opts = {}) {
-    return run(spec, opts, 'complete', (p, signal) => p.complete(spec.messages, { ...params(spec), json: spec.json, signal }));
+  /** Plain-text answer, tidied by `spec.finish` when the feature has one. @returns {Promise<{ text: string, provider: string, tokens: number }>} */
+  async function getText(spec, opts = {}) {
+    const result = await run(spec, opts, 'complete', (p, signal) => p.complete(spec.messages, { ...params(spec), json: spec.json, signal }));
+    return spec.finish ? { ...result, text: spec.finish(result.text) } : result;
   }
 
   /**
