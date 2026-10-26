@@ -18,6 +18,7 @@ const activities = require('./activities.service');
 const nextActions = require('./nextAction.service');
 const forecast = require('./forecast.service');
 const semanticIndex = require('./semanticIndex.service');
+const { localDate } = require('../lib/dates');
 
 const SUMMARY_KEY = 'lp:nightly:last';
 const DAY_MS = 86_400_000;
@@ -27,9 +28,6 @@ async function orgTimezone() {
   const settings = await prisma.orgSettings.findUnique({ where: { id: 1 }, select: { timezone: true } }).catch(() => null);
   return settings?.timezone || process.env.TZ || 'Asia/Kolkata';
 }
-
-/** YYYY-MM-DD in the given IANA timezone. */
-const localDate = (date, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone }).format(date);
 
 async function lastNightly() {
   return (await getJSON(SUMMARY_KEY)) ?? lastInMemory;
