@@ -18,7 +18,9 @@ import Badge from '../../components/ui/Badge';
 import EmptyState from '../../components/ui/EmptyState';
 import { WinProbabilityBar } from '../../components/crm/Indicators';
 import LostReasonDialog from '../../components/deals/LostReasonDialog';
-import { formatCurrency, formatDate, formatPercent, humanize } from '../../lib/format';
+import { CustomFieldInputs } from '../../components/crm/CustomFields';
+import { currencySymbol, formatCurrency, formatDate, formatPercent, humanize } from '../../lib/format';
+import { customFieldPayload } from '../../lib/customFields';
 import { qk } from '../../hooks/queries/keys';
 import { useDirectory, usePipelineStages } from '../../hooks/queries/lookups';
 import { useUrlFilters } from '../../hooks/useUrlFilters';
@@ -297,6 +299,7 @@ function AddDealForm({ stage, onClose }) {
     queryFn: () => getContacts({ limit: 100, sortBy: 'firstName', sortDir: 'asc' }).then(r => r.data),
   });
   const [form, setForm] = useState({ title: '', value: '', pipelineStageId: stage?.id ?? '', contactId: '', expectedCloseDate: '' });
+  const [custom, setCustom] = useState({});
   const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
   const { mutate, isPending } = useMutation({
     mutationFn: createDeal,
@@ -304,9 +307,9 @@ function AddDealForm({ stage, onClose }) {
     onError: err => toast.error(apiError(err, 'Failed to create deal')),
   });
   return (
-    <form onSubmit={e => { e.preventDefault(); mutate({ ...form, pipelineStageId: form.pipelineStageId || undefined, expectedCloseDate: form.expectedCloseDate || undefined }); }} className="space-y-4">
+    <form onSubmit={e => { e.preventDefault(); mutate({ ...form, pipelineStageId: form.pipelineStageId || undefined, expectedCloseDate: form.expectedCloseDate || undefined, customFields: customFieldPayload(custom) }); }} className="space-y-4">
       <Input label="Deal title" required value={form.title} onChange={set('title')} />
-      <Input label="Value ($)" type="number" min="0" value={form.value} onChange={set('value')} />
+      <Input label={`Value (${currencySymbol()})`} type="number" min="0" value={form.value} onChange={set('value')} />
       <div>
         <label htmlFor="deal-stage" className="block text-sm font-medium text-gray-700 mb-1">Stage</label>
         <select id="deal-stage" className={`w-full ${control}`} value={form.pipelineStageId} onChange={set('pipelineStageId')}>
@@ -321,6 +324,7 @@ function AddDealForm({ stage, onClose }) {
         </select>
       </div>
       <Input label="Expected close date" type="date" value={form.expectedCloseDate} onChange={set('expectedCloseDate')} />
+      <CustomFieldInputs entity="DEAL" values={custom} onChange={(key, value) => setCustom(p => ({ ...p, [key]: value }))} />
       <p className="text-xs text-gray-400">Win probability is calculated automatically from the deal's progress.</p>
       <div className="flex gap-3">
         <Button type="button" variant="secondary" onClick={onClose} className="flex-1">Cancel</Button>

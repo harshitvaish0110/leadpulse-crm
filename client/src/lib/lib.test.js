@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { currencySymbol, formatCurrency, formatDate, formatPercent, setCurrency, timeAgo, toPercent } from './format';
+import { customFieldPayload, customFieldState } from './customFields';
 import { parseEmail } from './email';
 import { renderMarkdown } from './markdown';
 import { createSSEParser } from './sse';
@@ -126,5 +127,18 @@ describe('timeAgo', () => {
     expect(timeAgo('2026-10-26T10:00:00Z', now)).toBe('2 hours ago');
     expect(timeAgo('2026-10-25T12:00:00Z', now)).toBe('yesterday');
     expect(timeAgo('not a date', now)).toBe('');
+  });
+});
+
+describe('custom field form values', () => {
+  it('sends filled-in values on create and only changes on edit', () => {
+    expect(customFieldPayload({ plan: 'Growth', seats: '' })).toEqual({ plan: 'Growth' });
+    expect(customFieldPayload({ plan: '' })).toBeUndefined();
+
+    const stored = { plan: 'Growth', seats: 25, budgetTier: 'SMB' };
+    const state = customFieldState(stored);
+    expect(state).toEqual({ plan: 'Growth', seats: '25', budgetTier: 'SMB' });
+    expect(customFieldPayload(state, stored)).toBeUndefined();
+    expect(customFieldPayload({ ...state, seats: '', plan: 'Starter' }, stored)).toEqual({ seats: null, plan: 'Starter' });
   });
 });

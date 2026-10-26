@@ -8,6 +8,8 @@ import { getCompanies } from '../../api/companies';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import SlideOver from '../../components/ui/SlideOver';
+import { CustomFieldInputs } from '../../components/crm/CustomFields';
+import { customFieldPayload } from '../../lib/customFields';
 import Avatar from '../../components/ui/Avatar';
 import Skeleton from '../../components/ui/Skeleton';
 import EmptyState from '../../components/ui/EmptyState';
@@ -54,6 +56,7 @@ function ContactForm({ onDone }) {
     queryFn: () => getCompanies({ limit: 100, sortBy: 'name', sortDir: 'asc' }).then(r => r.data),
   });
   const [form, setForm] = useState({ firstName: '', lastName: '', email: '', phone: '', title: '', companyId: '', status: 'LEAD', ownerId: userId, tags: '' });
+  const [custom, setCustom] = useState({});
   const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
 
   const { mutate, isPending } = useMutation({
@@ -63,7 +66,7 @@ function ContactForm({ onDone }) {
   });
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); mutate(form); }} className="space-y-4">
+    <form onSubmit={(e) => { e.preventDefault(); mutate({ ...form, customFields: customFieldPayload(custom) }); }} className="space-y-4">
       <div className="flex gap-3">
         <Input label="First name" required value={form.firstName} onChange={set('firstName')} className="w-1/2" />
         <Input label="Last name" required value={form.lastName} onChange={set('lastName')} className="w-1/2" />
@@ -95,6 +98,7 @@ function ContactForm({ onDone }) {
         )}
       </div>
       <Input label="Tags" value={form.tags} onChange={set('tags')} placeholder="Comma separated, e.g. Inbound, VIP" />
+      <CustomFieldInputs entity="CONTACT" values={custom} onChange={(key, value) => setCustom(p => ({ ...p, [key]: value }))} />
       <div className="flex gap-3 pt-2">
         <Button type="button" variant="secondary" onClick={onDone} className="flex-1">Cancel</Button>
         <Button type="submit" loading={isPending} className="flex-1">Create Contact</Button>

@@ -24,6 +24,8 @@ import ContactEmails from '../../components/contacts/ContactEmails';
 import ContactTasks from '../../components/contacts/ContactTasks';
 import ContactInsights from '../../components/contacts/ContactInsights';
 import { ScoreBadge, ChurnBar, WinProbabilityBar } from '../../components/crm/Indicators';
+import { CustomFieldInputs, CustomFieldValues } from '../../components/crm/CustomFields';
+import { customFieldPayload, customFieldState } from '../../lib/customFields';
 import { CONTACT_STATUSES } from '../../constants/crm';
 import { formatCurrency, formatDate, humanize } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
@@ -44,9 +46,10 @@ function EditContactForm({ contact, onCancel, onSave, saving }) {
     ...Object.fromEntries(EDITABLE_FIELDS.map(f => [f, contact[f] ?? ''])),
     tags: (contact.tags || []).join(', '),
   }));
+  const [custom, setCustom] = useState(() => customFieldState(contact.customFields));
   const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="space-y-4">
+    <form onSubmit={e => { e.preventDefault(); onSave({ ...form, customFields: customFieldPayload(custom, contact.customFields ?? {}) }); }} className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <Input label="First name" required value={form.firstName} onChange={set('firstName')} />
         <Input label="Last name" required value={form.lastName} onChange={set('lastName')} />
@@ -62,6 +65,7 @@ function EditContactForm({ contact, onCancel, onSave, saving }) {
         </select>
       </div>
       <Input label="Tags" value={form.tags} onChange={set('tags')} placeholder="Comma separated" />
+      <CustomFieldInputs entity="CONTACT" values={custom} onChange={(key, value) => setCustom(p => ({ ...p, [key]: value }))} />
       <div className="flex gap-3">
         <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">Cancel</Button>
         <Button type="submit" loading={saving} className="flex-1">Save Changes</Button>
@@ -162,6 +166,8 @@ function ProfilePanel({ contact, onEdit, onDelete, onEnrich }) {
       {contact.tags?.length > 0 && (
         <div className="flex gap-1.5 flex-wrap">{contact.tags.map(t => <Badge key={t} variant="indigo">{t}</Badge>)}</div>
       )}
+
+      <CustomFieldValues entity="CONTACT" values={contact.customFields} />
 
       <div className="flex gap-2 pt-2 border-t border-gray-100">
         <Button variant="secondary" size="sm" onClick={onEdit} className="flex-1"><Edit2 size={14} className="mr-1.5" /> Edit</Button>
