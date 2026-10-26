@@ -16,6 +16,7 @@ const { emitScoped } = require('../lib/realtime');
 const { afterDealChange } = require('../queues/triggers');
 const { removeFromIndex } = require('./semanticIndex.service');
 const { applyCustomFields } = require('./customFields.service');
+const webhooks = require('./webhooks.service');
 
 const DEAL_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
@@ -148,6 +149,12 @@ async function changeStage(user, dealId, target) {
       value:     Number(result.deal.value),
     });
     afterDealChange(result.deal);
+    webhooks.emit('deal.stage_changed', {
+      deal: webhooks.dealPayload(result.deal),
+      fromStage: result.before.stage,
+      toStage: result.deal.stage,
+      changedById: user.id,
+    });
   }
   return result.deal;
 }

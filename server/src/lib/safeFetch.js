@@ -11,11 +11,17 @@
  *    certificate against the hostname.
  *  - Redirects are followed by hand, at most 3, each one checked again.
  *  - 5 s for the whole fetch, 512 KB body cap, text/html only.
+ *
+ * safePost() sends webhooks with the same address checks and pinning, never
+ * follows redirects and only reads the status. With `allowPrivate` (set by
+ * WEBHOOK_ALLOW_PRIVATE outside production) it also accepts http and private
+ * addresses, for a test receiver on the developer's machine.
  */
 
 'use strict';
 
 const dns = require('node:dns').promises;
+const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
 
@@ -59,6 +65,11 @@ function checkUrl(raw) {
   return url;
 }
 
+/** Connects to the address that was checked, whatever DNS says now. */
+const pinned = (address) => (_host, options, cb) => (options?.all
+  ? cb(null, [{ address: address.address, family: address.family }])
+  : cb(null, address.address, address.family));
+
 /** Every address of `hostname`. */
 const resolveHost = (hostname) => dns.lookup(hostname, { all: true, verbatim: true });
 
@@ -78,10 +89,7 @@ function httpsGet(url, address, { timeoutMs, maxBytes }) {
       method: 'GET',
       headers: { 'User-Agent': 'LeadPulse-Enrichment/1.0', Accept: 'text/html' },
       timeout: timeoutMs,
-      // Connect to the address that was checked, whatever DNS says now.
-      lookup: (_host, options, cb) => (options?.all
-        ? cb(null, [{ address: address.address, family: address.family }])
-        : cb(null, address.address, address.family)),
+      lookup: pinned(address),
     }, (res) => {
       const status = res.statusCode;
       const contentType = String(res.headers['content-type'] || '');
@@ -142,4 +150,60 @@ async function safeFetch(rawUrl, {
   }
 }
 
-module.exports = { safeFetch, isPublicAddress, SafeFetchError };
+/**
+ * Checks a webhook URL and resolves it to the address to connect to.
+ * @returns {Promise<{ url: URL, address: { address: string, family: number } }>}
+ */
+async function postTarget(rawUrl, { allowPrivate = false, resolve = resolveHost } = {}) {
+  let url;
+  if (allowPrivate) {
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      throw new SafeFetchError('Invalid URL');
+    }
+    if (!['https:', 'http:'].includes(url.protocol)) throw new SafeFetchError('Only http and https URLs are allowed');
+    if (url.username || url.password) throw new SafeFetchError('Credentials in URLs are not allowed');
+  } else {
+    url = checkUrl(rawUrl);
+  }
+  const addresses = await addressesOf(url.hostname, resolve);
+  if (!addresses.length) throw new SafeFetchError('Host did not resolve');
+  if (!allowPrivate && addresses.some((a) => !isPublicAddress(a.address))) throw new SafeFetchError('Host resolves to a private or reserved address');
+  return { url, address: addresses[0] };
+}
+
+/**
+ * POSTs `body` and resolves with the response status as soon as it arrives.
+ * @param {string} rawUrl
+ * @param {string} body
+ * @param {Record<string, string>} headers
+ * @param {{ allowPrivate?: boolean, timeoutMs?: number, resolve?: Function }} [opts]
+ * @returns {Promise<{ status: number }>}
+ */
+async function safePost(rawUrl, body, headers, { allowPrivate = false, timeoutMs = 10_000, resolve = resolveHost } = {}) {
+  const { url, address } = await postTarget(rawUrl, { allowPrivate, resolve });
+  const secure = url.protocol === 'https:';
+  return new Promise((done, fail) => {
+    const req = (secure ? https : http).request({
+      host: url.hostname,
+      port: url.port || (secure ? 443 : 80),
+      path: `${url.pathname}${url.search}`,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+      lookup: pinned(address),
+    }, (res) => {
+      clearTimeout(timer);
+      done({ status: res.statusCode });
+      res.destroy(); // only the status matters; don't wait for (or buffer) the body
+    });
+    const timer = setTimeout(() => req.destroy(new SafeFetchError('Timed out')), timeoutMs);
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      fail(err);
+    });
+    req.end(body);
+  });
+}
+
+module.exports = { safeFetch, safePost, postTarget, isPublicAddress, SafeFetchError };

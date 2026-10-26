@@ -18,6 +18,7 @@ const nightly = require('../services/nightly.service');
 const tasks = require('../services/tasks.service');
 const nextActions = require('../services/nextAction.service');
 const transcription = require('../services/transcription.service');
+const webhooks = require('../services/webhooks.service');
 
 const handlers = {
   sentiment:         ({ activityId }) => activities.scoreSentiment(activityId),
@@ -30,6 +31,7 @@ const handlers = {
   'task-reminders':  () => tasks.sendReminders(),
   'nba-batch':       () => nextActions.refreshNextActions(),
   transcribe:        ({ activityId }, job) => transcription.transcribe(activityId, job),
+  'webhook-deliver': (data, job) => webhooks.deliver(data, job),
 };
 
 module.exports = { handlers };

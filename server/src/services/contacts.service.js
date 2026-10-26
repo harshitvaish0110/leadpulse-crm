@@ -13,6 +13,7 @@ const { afterContactChange, afterBulkChange, reindex } = require('../queues/trig
 const { removeFromIndex } = require('./semanticIndex.service');
 const { cleanTags, registerTags } = require('./settings.service');
 const { applyCustomFields } = require('./customFields.service');
+const webhooks = require('./webhooks.service');
 
 const STATUSES = ['LEAD', 'ACTIVE', 'INACTIVE', 'CHURNED'];
 const EDITABLE = ['firstName', 'lastName', 'email', 'phone', 'title', 'linkedinUrl', 'status', 'companyId', 'tags', 'customFields'];
@@ -63,6 +64,7 @@ async function createContact(user, input) {
   await registerTags(tags);
   emitScoped([contact.ownerId], 'contact:created', { contactId: contact.id });
   afterContactChange(contact.id, { created: true });
+  webhooks.emit('contact.created', { contact: webhooks.contactPayload(contact) });
   return contact;
 }
 
@@ -242,9 +244,10 @@ async function importContacts(user, rows) {
 
       if (!existing) {
         if (!fields.firstName || !fields.lastName) { result.failed.push({ row, reason: 'Missing first or last name' }); continue; }
-        await prisma.contact.create({
+        const created = await prisma.contact.create({
           data: { ...fields, email, companyId, tags, status: status || 'LEAD', ownerId: user.id },
         });
+        webhooks.emit('contact.created', { contact: webhooks.contactPayload(created) });
         result.created += 1;
         continue;
       }
