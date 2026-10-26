@@ -1,31 +1,79 @@
 import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { PhoneCall, Mail, Calendar, FileText, MessageSquare, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { PhoneCall, Mail, Calendar, FileText, MessageSquare, ChevronDown, ChevronRight, Trash2, RotateCcw } from 'lucide-react';
 import Avatar from '../ui/Avatar';
 import { SentimentBadge } from '../crm/Indicators';
 import { formatDate, humanize } from '../../lib/format';
+import { getAudioUrl, retryTranscription } from '../../api/activities';
+import { qk } from '../../hooks/queries/keys';
+import toast from 'react-hot-toast';
 
 const ACTIVITY_ICONS = { CALL: PhoneCall, EMAIL: Mail, MEETING: Calendar, NOTE: FileText, TRANSCRIPT: MessageSquare };
 
-function TranscriptDetails({ metadata, transcript }) {
+const SECTIONS = [['Action items', 'actionItems'], ['Objections', 'objections'], ['Pricing mentions', 'pricingMentions'], ['Key topics', 'keyTopics']];
+
+/** A call recording's transcript: processing, failed (with Retry) or the structured notes and audio. */
+function TranscriptCard({ activity }) {
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const lists = [['Action items', metadata?.actionItems], ['Objections', metadata?.objections], ['Pricing mentions', metadata?.pricingMentions]]
-    .filter(([, items]) => Array.isArray(items) && items.length);
-  if (!lists.length && !transcript) return null;
+  const [audio, setAudio] = useState(null); // { url } once fetched
+  const meta = activity.metadata ?? {};
+  const retry = useMutation({
+    mutationFn: () => retryTranscription(activity.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.activities.all }),
+    onError: (err) => toast.error(err.response?.data?.error || 'Could not retry the transcription'),
+  });
+
+  const expand = async () => {
+    setOpen((v) => !v);
+    if (!open && activity.audioKey && !audio) {
+      try {
+        setAudio((await getAudioUrl(activity.id)).data);
+      } catch {
+        setAudio({ error: true });
+      }
+    }
+  };
+
+  if (meta.status === 'processing') {
+    return <p className="mt-1 text-xs font-medium text-indigo-600 animate-pulse" aria-live="polite">Transcribing the recording…</p>;
+  }
+  if (meta.status === 'failed') {
+    return (
+      <div role="alert" className="mt-1 flex items-center gap-2 flex-wrap text-xs text-red-600">
+        {meta.error || 'Transcription failed.'}
+        <button type="button" onClick={() => retry.mutate()} disabled={retry.isPending} className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:text-indigo-700">
+          <RotateCcw size={11} /> Retry
+        </button>
+      </div>
+    );
+  }
+  const lists = SECTIONS.filter(([, key]) => Array.isArray(meta[key]) && meta[key].length);
+  if (!lists.length && !activity.transcript && !activity.audioKey) return null;
   return (
     <div className="mt-2">
-      <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700">
+      <button type="button" onClick={expand} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700">
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Call details
       </button>
       {open && (
         <div className="mt-2 space-y-2 bg-gray-50 rounded-lg p-3">
-          {lists.map(([title, items]) => (
-            <div key={title}>
+          {activity.audioKey && (audio?.url
+            ? <audio controls preload="none" src={audio.url} className="w-full h-9"><track kind="captions" /></audio>
+            : <p className="text-xs text-gray-400">{audio?.error ? 'The recording could not be loaded.' : 'Loading the recording…'}</p>)}
+          {meta.nextSteps && <p className="text-xs text-gray-600"><span className="font-semibold">Next steps:</span> {meta.nextSteps}</p>}
+          {lists.map(([title, key]) => (
+            <div key={key}>
               <p className="text-xs font-semibold text-gray-600">{title}</p>
-              <ul className="list-disc ml-4 text-xs text-gray-600">{items.map((item, i) => <li key={i}>{String(item)}</li>)}</ul>
+              <ul className="list-disc ml-4 text-xs text-gray-600">{meta[key].map((item, i) => <li key={i}>{String(item)}</li>)}</ul>
             </div>
           ))}
-          {transcript && <p className="text-xs text-gray-500 whitespace-pre-wrap max-h-48 overflow-y-auto">{transcript}</p>}
+          {activity.transcript && (
+            <details>
+              <summary className="text-xs font-semibold text-gray-600 cursor-pointer">Full transcript</summary>
+              <p className="mt-1 text-xs text-gray-500 whitespace-pre-wrap max-h-48 overflow-y-auto">{activity.transcript}</p>
+            </details>
+          )}
         </div>
       )}
     </div>
@@ -71,7 +119,7 @@ export default function ActivityTimeline({ activities, showContact = false, show
                 )}
               </div>
               {a.notes && <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap line-clamp-4">{a.notes}</p>}
-              {a.type === 'TRANSCRIPT' && <TranscriptDetails metadata={a.metadata} transcript={a.transcript} />}
+              {a.type === 'TRANSCRIPT' && <TranscriptCard activity={a} />}
             </div>
           </li>
         );
