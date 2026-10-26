@@ -5,6 +5,7 @@
 
 'use strict';
 
+const { logger } = require('../lib/logger');
 const { prisma } = require('../lib/prisma');
 const { sendEmail } = require('../lib/mailer');
 const { ApiError } = require('../middleware/error.middleware');
@@ -110,7 +111,7 @@ async function send(req, res) {
     const sent = await prisma.emailDraft.findUnique({ where: { id: email.id }, select: EMAIL_SELECT });
     res.json({ success: true, email: sent, previewUrl });
   } catch (err) {
-    console.warn('[Email] send failed:', err.message);
+    logger.warn({ event: 'email_send_failed', err: err.message }, 'Email send failed');
     const failed = await prisma.emailDraft.update({ where: { id: email.id }, data: { status: 'FAILED', sentAt: null }, select: EMAIL_SELECT });
     res.status(502).json({ success: false, error: 'The email could not be sent. Check the email settings and try again.', code: 'EMAIL_SEND_FAILED', email: failed });
   }

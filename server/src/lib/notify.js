@@ -7,6 +7,7 @@
 
 const { prisma } = require('./prisma');
 const { emitToUsers } = require('./realtime');
+const { logger } = require('./logger');
 
 const SELECT = { id: true, type: true, title: true, message: true, link: true, data: true, readAt: true, createdAt: true };
 
@@ -24,7 +25,7 @@ async function notify(userIds, { type, title, message, link = null, data = undef
       });
       emitToUsers([userId], 'notification:new', row);
     } catch (err) {
-      console.warn('[Notify] failed:', err.message);
+      logger.warn({ event: 'notify_failed', err: err.message }, 'Notification failed');
     }
   }));
 }

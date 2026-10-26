@@ -1,0 +1,37 @@
+# Nightly pipeline for the hosted deployment: free-tier hosts sleep when idle,
+# so this wakes the API and ML service, then asks the API to queue the nightly run.
+# Needs repository secrets API_URL, ML_URL and INTERNAL_JOB_TOKEN; skipped until they exist.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "30 20 * * *" # 02:00 IST
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      ML_URL: ${{ secrets.ML_URL }}
+      INTERNAL_JOB_TOKEN: ${{ secrets.INTERNAL_JOB_TOKEN }}
+    steps:
+      - name: Skip until the deployment secrets are set
+        if: env.API_URL == '' || env.INTERNAL_JOB_TOKEN == ''
+        run: echo "::notice::API_URL / INTERNAL_JOB_TOKEN are not set; nothing to trigger."
+
+      - name: Wake the services
+        if: env.API_URL != '' && env.INTERNAL_JOB_TOKEN != ''
+        run: |
+          for url in "$API_URL/health" ${ML_URL:+"$ML_URL/health"}; do
+            for attempt in 1 2 3; do
+              curl -sf --max-time 60 "$url" > /dev/null && echo "awake: $url" && break
+              echo "waiting for $url (attempt $attempt)"; sleep 30
+            done
+          done
+
+      - name: Queue the nightly run
+        if: env.API_URL != '' && env.INTERNAL_JOB_TOKEN != ''
+        run: |
+          curl -sf --max-time 60 -X POST "$API_URL/internal/jobs/nightly" -H "X-Internal-Token: $INTERNAL_JOB_TOKEN"

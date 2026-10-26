@@ -8,7 +8,7 @@ const crypto   = require('crypto');
 const express  = require('express');
 const cors     = require('cors');
 const helmet   = require('helmet');
-const morgan   = require('morgan');
+const pinoHttp = require('pino-http');
 
 const authRoutes       = require('./routes/auth.routes');
 const contactRoutes    = require('./routes/contacts.routes');
@@ -23,7 +23,11 @@ const settingsRoutes   = require('./routes/settings.routes');
 const emailRoutes      = require('./routes/emails.routes');
 const attachmentRoutes = require('./routes/attachments.routes');
 const notificationRoutes = require('./routes/notifications.routes');
+const internalRoutes   = require('./routes/internal.routes');
 const storage          = require('./lib/storage');
+const { logger }       = require('./lib/logger');
+const { readiness }    = require('./lib/health');
+const { version }      = require('../package.json');
 
 const { ApiError, errorHandler, notFoundHandler } = require('./middleware/error.middleware');
 const { allowedOrigins } = require('./lib/env');
@@ -44,6 +48,19 @@ function createApp() {
     next();
   });
 
+  // One JSON line per request. The path only: queries can hold search terms and signed-link signatures.
+  app.use(pinoHttp({
+    logger,
+    genReqId: (req) => req.id,
+    autoLogging: { ignore: (req) => req.url.startsWith('/health') },
+    customProps: (req) => ({ requestId: req.id, userId: req.user?.id }),
+    customLogLevel: (_req, res, err) => (err || res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info'),
+    serializers: {
+      req: (req) => ({ method: req.method, url: req.url.split('?')[0] }),
+      res: (res) => ({ statusCode: res.statusCode }),
+    },
+  }));
+
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 
   app.use(cors({
@@ -58,17 +75,20 @@ function createApp() {
     exposedHeaders: ['X-Request-Id', 'Retry-After', 'Content-Disposition'],
   }));
 
-  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
-    skip: () => process.env.NODE_ENV === 'test',
-  }));
   // 1 MB everywhere except routes that declare their own, larger limit.
   const LARGE_BODY_ROUTES = new Set(['/api/contacts/import']);
   const json = express.json({ limit: '1mb' });
   app.use((req, res, next) => (LARGE_BODY_ROUTES.has(req.path) ? next() : json(req, res, next)));
 
+  // Liveness (no dependencies) and readiness (database, Redis, ML service, AI providers, jobs).
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'leadpulse-server', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', service: 'leadpulse-server', version, uptime: Math.round(process.uptime()) });
   });
+  app.get('/health/ready', async (_req, res) => {
+    const report = await readiness();
+    res.status(report.status === 'down' ? 503 : 200).json(report);
+  });
+  app.use('/internal', internalRoutes);
 
   // ── API routes ──────────────────────────────────────────────────────────────
   app.use('/api/auth',       authRoutes);
