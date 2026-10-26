@@ -31,6 +31,7 @@ const ProfileSettings      = lazy(() => import('./pages/settings/ProfileSettings
 const GeneralSettings      = lazy(() => import('./pages/settings/GeneralSettings'));
 const UsersSettings        = lazy(() => import('./pages/settings/UsersSettings'));
 const IntegrationsSettings = lazy(() => import('./pages/settings/IntegrationsSettings'));
+const AuditLogSettings     = lazy(() => import('./pages/settings/AuditLogSettings'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -87,6 +88,7 @@ export default function App() {
                   <Route path="general"      element={<GeneralSettings />} />
                   <Route path="users"        element={<UsersSettings />} />
                   <Route path="integrations" element={<IntegrationsSettings />} />
+                  <Route path="audit"        element={<AuditLogSettings />} />
                 </Route>
               </Route>
             </Route>
