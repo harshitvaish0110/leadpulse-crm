@@ -25,12 +25,11 @@ const specs = {
   nextAction: prompts.nextAction({ contact, deal, daysSinceContact: 4, lastEmail: inbound }),
   leadExplain: prompts.leadExplain({ contact, result }),
   enrich: prompts.enrich({ contact, domain: 'acme.com', publicMeta: { title: `Acme ${injection}`, description: 'Tools', siteName: 'Acme' } }),
-  chat: prompts.chat({ question: 'How do I handle objections?' }),
+  chatAnswer: prompts.chatAnswer({ question: 'How do I handle objections?', chunks: [{ content: injection }], history: [], userName: 'Ana', today: '2026-10-26 (Monday)' }),
 };
 
 test('CRM data sits inside one <crm_data> block and cannot close it early', () => {
   for (const [name, spec] of Object.entries(specs)) {
-    if (name === 'chat') continue;
     const [system, user] = spec.messages;
     assert.match(system.content, /untrusted data from the CRM/, `${name}: safety rule in the system prompt`);
     assert.equal(user.content.split('<crm_data>').length - 1, 1, `${name}: one opening tag`);

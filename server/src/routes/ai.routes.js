@@ -23,6 +23,12 @@ router.post('/lead-score/:id/explain',     ctrl.explainLeadScore);
 router.post('/enrich-contact',             ctrl.enrichContact);
 router.post('/enrich-contact/:id/apply',   ctrl.applyEnrichment);
 router.post('/chat',                       ctrl.chat);
+router.get('/conversations',               ctrl.listConversations);
+router.get('/conversations/:id',           ctrl.getConversation);
+router.delete('/conversations/:id',        ctrl.deleteConversation);
+router.get('/actions',                     ctrl.listActions);
+router.post('/actions/:id/approve',        ctrl.approveAction);
+router.post('/actions/:id/reject',         ctrl.rejectAction);
 router.get('/index/status',                requireRole('ADMIN'), ctrl.indexStatus);
 router.post('/index/rebuild',              requireRole('ADMIN'), ctrl.rebuildIndex);
 
