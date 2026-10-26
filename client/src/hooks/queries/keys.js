@@ -29,6 +29,10 @@ export const qk = {
     all: ['tasks'],
     list: (params) => ['tasks', 'list', params],
   },
+  emails: {
+    all: ['emails'],
+    thread: (contactId) => ['emails', 'thread', contactId],
+  },
   analytics: {
     all: ['analytics'],
     report: (name, params) => ['analytics', name, params],
