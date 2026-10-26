@@ -275,5 +275,5 @@ async function importContacts(user, rows) {
 
 module.exports = {
   STATUSES, CONTACT_LIST_INCLUDE,
-  createContact, updateContact, deleteContact, bulkAction, importContacts, cleanTags,
+  createContact, updateContact, deleteContact, bulkAction, importContacts, cleanTags, companyFor,
 };
