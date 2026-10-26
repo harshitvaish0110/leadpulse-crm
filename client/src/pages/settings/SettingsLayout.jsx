@@ -6,6 +6,7 @@ const TABS = [
   { to: '/settings/general', label: 'Workspace', admin: true },
   { to: '/settings/users', label: 'Team & Users', admin: true },
   { to: '/settings/integrations', label: 'Integrations', admin: true },
+  { to: '/settings/audit', label: 'Audit log', admin: true },
 ];
 
 export default function SettingsLayout() {
