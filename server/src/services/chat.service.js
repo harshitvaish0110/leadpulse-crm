@@ -23,6 +23,7 @@ const prompts = require('./ai/prompts');
 const semanticIndex = require('./semanticIndex.service');
 const actions = require('./actions.service');
 const { localDate, orgTimezone } = require('./nightly.service');
+const { money } = require('../lib/workspace');
 
 const HISTORY_TURNS = 6;
 // Asking for proposals costs a second LLM call, so it only happens for requests to do something.
@@ -33,7 +34,6 @@ const AGGREGATE = /\b(hot|hottest|top|best|biggest|largest|pipeline|risk|risky|c
 const OPEN_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION'];
 
 const fullName = (p) => `${p.firstName} ${p.lastName}`;
-const money = (v) => `$${Math.round(Number(v || 0)).toLocaleString('en-US')}`;
 const pct = (p) => `${Math.round((p ?? 0) * 100)}%`;
 
 /** A live summary of the caller's book (the whole org for managers), as one extra record. */

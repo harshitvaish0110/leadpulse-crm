@@ -11,6 +11,8 @@ const { scopeFor, isPrivileged, resolveOwnerId } = require('../middleware/auth.m
 const { emitScoped } = require('../lib/realtime');
 const { afterContactChange, afterBulkChange, reindex } = require('../queues/triggers');
 const { removeFromIndex } = require('./semanticIndex.service');
+const { cleanTags, registerTags } = require('./settings.service');
+const { applyCustomFields } = require('./customFields.service');
 
 const STATUSES = ['LEAD', 'ACTIVE', 'INACTIVE', 'CHURNED'];
 const EDITABLE = ['firstName', 'lastName', 'email', 'phone', 'title', 'linkedinUrl', 'status', 'companyId', 'tags', 'customFields'];
@@ -28,12 +30,6 @@ const invalid = (path, msg) => ApiError.validation([{ path, msg }]);
 const normalizeEmail = (email) => String(email ?? '').trim().toLowerCase();
 const isEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-/** Trimmed, de-duplicated tags of at most 40 characters. */
-function cleanTags(tags) {
-  const list = Array.isArray(tags) ? tags : String(tags ?? '').split(/[;,]/);
-  return [...new Set(list.map((t) => String(t).trim()).filter(Boolean).map((t) => t.slice(0, 40)))];
-}
-
 function checkStatus(status) {
   if (status !== undefined && !STATUSES.includes(status)) throw invalid('status', `status must be one of: ${STATUSES.join(', ')}`);
 }
@@ -45,6 +41,8 @@ async function createContact(user, input) {
   if (!isEmail(email)) throw invalid('email', 'Must be a valid email');
   checkStatus(input.status);
   const ownerId = (await resolveOwnerId(user, input.ownerId)) ?? user.id;
+  const tags = cleanTags(input.tags);
+  const customFields = await applyCustomFields('CONTACT', input.customFields, null, { creating: true });
 
   const contact = await prisma.contact.create({
     data: {
@@ -56,12 +54,13 @@ async function createContact(user, input) {
       linkedinUrl:  input.linkedinUrl || null,
       companyId:    input.companyId || null,
       ownerId,
-      tags:         cleanTags(input.tags),
+      tags,
       status:       input.status || 'LEAD',
-      customFields: input.customFields || undefined,
+      customFields,
     },
     include: CONTACT_LIST_INCLUDE,
   });
+  await registerTags(tags);
   emitScoped([contact.ownerId], 'contact:created', { contactId: contact.id });
   afterContactChange(contact.id, { created: true });
   return contact;
@@ -86,8 +85,10 @@ async function updateContact(user, contactId, input, req) {
   const where = { id: contactId, ...scopeFor(user, 'contact') };
   const before = await prisma.contact.findFirst({ where, select: { ownerId: true, ...Object.fromEntries(Object.keys(data).map((k) => [k, true])) } });
   if (!before) throw ApiError.notFound('Contact not found');
+  if (data.customFields !== undefined) data.customFields = await applyCustomFields('CONTACT', data.customFields, before.customFields);
 
   const contact = await prisma.contact.update({ where, data, include: CONTACT_LIST_INCLUDE });
+  if (data.tags) await registerTags(data.tags);
   if (req) await audit(req, { action: 'update', entityType: 'contact', entityId: contactId, before, after: data });
 
   // A reassigned contact also disappears from the previous owner's views.
@@ -154,7 +155,7 @@ async function bulkAction(user, { ids, action, ownerId, tag }, req) {
           WHERE "id" = ANY(${targetIds}::text[]) AND NOT (${name} = ANY("tags"))`
       : await prisma.$executeRaw`UPDATE "contacts" SET "tags" = array_remove("tags", ${name}), "updatedAt" = NOW()
           WHERE "id" = ANY(${targetIds}::text[]) AND ${name} = ANY("tags")`;
-    if (action === 'tag') await prisma.tag.upsert({ where: { name }, create: { name }, update: {} });
+    if (action === 'tag') await registerTags([name]);
     emitScoped(owners, 'contact:updated', { contactIds: targetIds });
     targetIds.forEach((id) => reindex('contact', id));
     return { updated: count, skipped: skipped + (targetIds.length - count) };
@@ -210,6 +211,7 @@ async function importContacts(user, rows) {
   const result = { created: 0, updated: 0, failed: [] };
   const companies = new Map();
   const seen = new Set();
+  const usedTags = new Set();
 
   for (const [index, raw] of rows.entries()) {
     const row = index + 1;
@@ -225,6 +227,7 @@ async function importContacts(user, rows) {
       const companyName = String(raw.company ?? '').trim();
       const companyId = companyName ? await companyFor(companyName, email, companies) : null;
       const tags = cleanTags(raw.tags);
+      tags.forEach((t) => usedTags.add(t));
       const fields = {
         firstName: String(raw.firstName ?? '').trim(),
         lastName:  String(raw.lastName ?? '').trim(),
@@ -266,6 +269,7 @@ async function importContacts(user, rows) {
     }
   }
 
+  await registerTags([...usedTags]);
   if (result.created || result.updated) {
     emitScoped([user.id], 'contact:created', { imported: result.created + result.updated });
     afterBulkChange();
@@ -275,5 +279,5 @@ async function importContacts(user, rows) {
 
 module.exports = {
   STATUSES, CONTACT_LIST_INCLUDE,
-  createContact, updateContact, deleteContact, bulkAction, importContacts, cleanTags, companyFor,
+  createContact, updateContact, deleteContact, bulkAction, importContacts, companyFor,
 };
