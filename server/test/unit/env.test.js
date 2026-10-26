@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { validateEnv } = require('../../src/lib/env');
 
-const VALID = { DATABASE_URL: 'postgresql://u:p@localhost:5432/db', JWT_SECRET: 'x'.repeat(32), GEMINI_API_KEY: 'k' };
+const VALID = { DATABASE_URL: 'postgresql://u:p@localhost:5432/db', JWT_SECRET: 'x'.repeat(32), GEMINI_API_KEY: 'k', REDIS_URL: 'redis://localhost:6379' };
 
 test('valid configuration has no errors or warnings', () => {
   assert.deepEqual(validateEnv(VALID), { errors: [], warnings: [] });
@@ -22,15 +22,22 @@ test('JWT_SECRET shorter than 32 characters is an error', () => {
 });
 
 test('no AI key is a warning, suppressed in mock mode', () => {
-  const noKeys = { DATABASE_URL: VALID.DATABASE_URL, JWT_SECRET: VALID.JWT_SECRET };
+  const noKeys = { DATABASE_URL: VALID.DATABASE_URL, JWT_SECRET: VALID.JWT_SECRET, REDIS_URL: VALID.REDIS_URL };
   assert.equal(validateEnv(noKeys).warnings.length, 1);
   assert.equal(validateEnv({ ...noKeys, AI_MOCK: 'true' }).warnings.length, 0);
 });
 
-test('production requires ML_SERVICE_TOKEN and an origin allow-list', () => {
+test('production requires ML_SERVICE_TOKEN, an origin allow-list and INTERNAL_JOB_TOKEN', () => {
   const { errors } = validateEnv({ ...VALID, NODE_ENV: 'production' });
-  assert.equal(errors.length, 2);
-  assert.deepEqual(validateEnv({ ...VALID, NODE_ENV: 'production', ML_SERVICE_TOKEN: 't', CORS_ORIGINS: 'https://a.app' }).errors, []);
+  assert.equal(errors.length, 3);
+  assert.deepEqual(validateEnv({
+    ...VALID, NODE_ENV: 'production', ML_SERVICE_TOKEN: 't', CORS_ORIGINS: 'https://a.app', INTERNAL_JOB_TOKEN: 'i',
+  }).errors, []);
+});
+
+test('missing REDIS_URL is a warning (jobs fall back to running in the API)', () => {
+  const { REDIS_URL, ...withoutRedis } = VALID;
+  assert.match(validateEnv(withoutRedis).warnings[0], /REDIS_URL/);
 });
 
 test('allowedOrigins parses CORS_ORIGINS and falls back to CLIENT_URL', () => {
