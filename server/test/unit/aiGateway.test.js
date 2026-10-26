@@ -249,3 +249,54 @@ test('breaker: failures older than 5 minutes do not count', () => {
   breaker.failure('p');
   assert.equal(breaker.state('p'), 'closed');
 });
+
+test('a spent quota is not retried, and the provider is skipped until it resets', async () => {
+  let now = 1_000_000;
+  const breaker = createBreaker({ now: () => now });
+  const spent = Object.assign(failure(429), { retryAfterMs: 15 * 3_600_000 });
+  const flash = provider('flash', { complete: () => { throw spent; } });
+  const lite = provider('lite', { complete: () => ({ text: 'from lite', tokens: 0 }) });
+  const { gateway } = gatewayWith([flash, lite], { breaker });
+
+  assert.equal((await gateway.getText(spec)).provider, 'lite');
+  assert.equal(flash.calls, 1, 'no retry on a spent quota');
+  assert.equal(breaker.reopensAt('flash'), now + 15 * 3_600_000);
+
+  await gateway.getText(spec);
+  assert.equal(flash.calls, 1, 'skipped while the quota is spent');
+
+  now += 15 * 3_600_000;
+  await gateway.getText(spec);
+  assert.equal(flash.calls, 2, 'tried again once it resets');
+});
+
+test('a short wait (a per-minute burst) is still retried', async () => {
+  const burst = provider('burst', { complete: (n) => { if (n === 1) throw Object.assign(failure(429), { retryAfterMs: 5000 }); return { text: 'ok', tokens: 0 }; } });
+  const { gateway } = gatewayWith([burst]);
+  assert.equal((await gateway.getText(spec)).text, 'ok');
+  assert.equal(burst.calls, 2);
+});
+
+test('breaker: trip opens it for the given time', () => {
+  let now = 0;
+  const breaker = createBreaker({ now: () => now });
+  breaker.trip('p', 3_600_000);
+  assert.equal(breaker.state('p'), 'open');
+  assert.equal(breaker.allow('p'), false);
+  now += 3_600_000;
+  assert.equal(breaker.reopensAt('p'), null);
+  assert.equal(breaker.allow('p'), true, 'a trial once the time is up');
+});
+
+test('providers report the wait they asked for: Retry-After, Google RetryInfo or "retry in"', () => {
+  const { retryAfterMs, httpError, DEFAULT_ORDER } = require('../../src/services/ai/providers');
+  const google = '{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"55305s"}]}}';
+  assert.equal(retryAfterMs(google), 55_305_000);
+  assert.equal(retryAfterMs(JSON.stringify({ message: google })), 55_305_000, 'also when the JSON is nested in a message');
+  assert.equal(retryAfterMs('Please retry in 15h21m45.5s.'), 55_305_500);
+  assert.equal(retryAfterMs('', '30'), 30_000);
+  assert.equal(retryAfterMs('try again later'), null);
+  assert.equal(httpError('groq', 429, '{}', '120').retryAfterMs, 120_000);
+  assert.equal(httpError('groq', 500, '{}', '120').retryAfterMs, null, 'only for 429');
+  assert.deepEqual(DEFAULT_ORDER.slice(0, 3), ['gemini', 'gemini-lite', 'groq']);
+});
