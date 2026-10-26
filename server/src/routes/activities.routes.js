@@ -1,46 +1,31 @@
 'use strict';
 
-const crypto  = require('crypto');
-const path    = require('path');
-const fs      = require('fs');
 const { Router } = require('express');
 const multer  = require('multer');
 const { authenticate } = require('../middleware/auth.middleware');
+const { ApiError } = require('../middleware/error.middleware');
 const ctrl    = require('../controllers/activities.controller');
 
 const router = Router();
 router.use(authenticate);
 
-// ── Multer config for audio uploads ─────────────────────────────────────────
-const uploadDir = path.join(__dirname, '..', '..', 'uploads', 'audio');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/webm', 'audio/ogg', 'audio/flac']);
 
-const audioStorage = multer.diskStorage({
-  destination: uploadDir,
-  // Never trust the client's filename (path traversal); the file is deleted after transcription.
-  filename:    (_req, _file, cb) => cb(null, crypto.randomUUID()),
-});
-
+// Kept in memory, then written under a random key by the storage adapter; the client's file name is never used.
 const audioUpload = multer({
-  storage:    audioStorage,
-  limits:     { fileSize: 25 * 1024 * 1024 }, // 25MB
-  fileFilter: (req, file, cb) => {
-    const allowed = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/webm', 'audio/ogg', 'audio/flac', 'audio/x-m4a'];
-    if (allowed.includes(file.mimetype.split(';')[0])) {
-      cb(null, true);
-    } else {
-      cb(new Error(`Unsupported audio format: ${file.mimetype}`), false);
-    }
-  },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => (AUDIO_TYPES.has(file.mimetype.split(';')[0])
+    ? cb(null, true)
+    : cb(new ApiError(`Unsupported audio format: ${file.mimetype}`, 415, 'UNSUPPORTED_MEDIA_TYPE'))),
 });
 
-// ── Routes ────────────────────────────────────────────────────────────────────
 router.get('/',        ctrl.list);
 router.post('/',       ctrl.create);
+router.post('/upload-audio', audioUpload.single('audio'), ctrl.uploadAudio);
 router.get('/:id',     ctrl.getOne);
 router.delete('/:id',  ctrl.remove);
-
-// Audio transcription — uses multer for multipart/form-data
-router.post('/upload-audio', audioUpload.single('audio'), ctrl.uploadAudio);
+router.post('/:id/retry-transcription', ctrl.retryTranscription);
+router.get('/:id/audio-url', ctrl.audioUrl);
 
 module.exports = router;

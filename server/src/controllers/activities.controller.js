@@ -6,12 +6,9 @@
 
 'use strict';
 
-const fs         = require('fs');
 const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 const { scoped, scopeFor } = require('../middleware/auth.middleware');
-const { ml } = require('../lib/mlClient');
-const { logger } = require('../lib/logger');
 const activities = require('../services/activities.service');
 
 const { ACTIVITY_INCLUDE } = activities;
@@ -80,44 +77,24 @@ async function remove(req, res) {
   res.json({ success: true, message: 'Activity deleted' });
 }
 
-const FALLBACK_EXTRACTION = {
-  transcript:      null,
-  summary:         'Transcription is unavailable right now. The recording was not processed.',
-  sentiment:       null,
-  actionItems:     [],
-  objections:      [],
-  pricingMentions: [],
-  nextSteps:       '',
-  keyTopics:       [],
-};
-
 /**
- * POST /api/activities/upload-audio (multipart field `audio`)
- * Sends the recording to the ML service for transcription and logs a TRANSCRIPT activity.
+ * POST /api/activities/upload-audio (multipart `audio`, `contactId`, `dealId?`, `occurredAt?`)
+ * Stores the recording and answers 202; the transcript arrives later (socket `activity:transcribed`).
  */
 async function uploadAudio(req, res) {
-  const file = req.file;
-  try {
-    if (!file) throw ApiError.badRequest('No audio file uploaded (field "audio")');
-    const { contactId, dealId } = req.body;
-    await activities.assertParents(req.user, contactId, dealId);
-
-    const form = new FormData();
-    form.append('audio', new Blob([await fs.promises.readFile(file.path)], { type: file.mimetype }), file.originalname || 'recording.webm');
-
-    let extraction;
-    try {
-      ({ data: extraction } = await ml.post('/transcribe/', form, { timeout: 120_000 }));
-    } catch (err) {
-      logger.warn({ event: 'transcription_unavailable', err: err.message }, 'Transcription unavailable');
-      extraction = FALLBACK_EXTRACTION;
-    }
-
-    const activity = await activities.logCallRecording(req.user, { contactId, dealId, extraction });
-    res.json({ success: true, activity, extraction });
-  } finally {
-    if (file?.path) fs.promises.unlink(file.path).catch(() => {});
-  }
+  if (!req.file) throw ApiError.badRequest('No audio file uploaded (field "audio")');
+  const { contactId, dealId, occurredAt } = req.body ?? {};
+  res.status(202).json({ success: true, activity: await activities.logRecording(req.user, { contactId, dealId, occurredAt, file: req.file }) });
 }
 
-module.exports = { list, create, getOne, remove, uploadAudio };
+/** POST /api/activities/:id/retry-transcription */
+async function retryTranscription(req, res) {
+  res.status(202).json({ success: true, activity: await activities.retryTranscription(req.user, req.params.id) });
+}
+
+/** GET /api/activities/:id/audio-url → { url, expiresAt } (10 minutes) */
+async function audioUrl(req, res) {
+  res.json({ success: true, ...(await activities.recordingUrl(req.user, req.params.id)) });
+}
+
+module.exports = { list, create, getOne, remove, uploadAudio, retryTranscription, audioUrl };

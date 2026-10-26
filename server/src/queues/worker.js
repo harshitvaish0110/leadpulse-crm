@@ -34,6 +34,8 @@ function startWorker({ concurrency = Number(process.env.WORKER_CONCURRENCY) || 4
   });
 
   registerSchedules().catch((err) => logger.warn({ event: 'schedules_failed', err: err.message }, 'Could not register job schedules'));
+  require('../services/transcription.service').recoverStuck() // loaded here: it pulls in the AI gateway
+    .catch((err) => logger.warn({ event: 'recovery_failed', err: err.message }, 'Could not re-queue interrupted transcriptions'));
   logger.info({ event: 'worker_started', concurrency }, 'Worker started');
   return worker;
 }

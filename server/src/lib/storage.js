@@ -48,6 +48,11 @@ async function put(key, buffer) {
   await fs.writeFile(target, buffer, { flag: 'wx' });
 }
 
+async function read(key) {
+  driver();
+  return fs.readFile(filePath(key));
+}
+
 async function remove(key) {
   driver();
   await fs.rm(filePath(key), { force: true });
@@ -71,4 +76,4 @@ function verify(key, { exp, name, sig }) {
   return filePath(key);
 }
 
-module.exports = { newKey, put, remove, signedUrl, verify };
+module.exports = { newKey, put, read, remove, signedUrl, verify };
