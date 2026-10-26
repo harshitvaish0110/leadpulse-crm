@@ -14,6 +14,7 @@ const { ml } = require('../lib/mlClient');
 const { emitScoped } = require('../lib/realtime');
 const { afterActivityChange, reindex, SENTIMENT_TYPES } = require('../queues/triggers');
 const { removeFromIndex } = require('./semanticIndex.service');
+const { snapshot, MIN_CHANGE } = require('./scoring.service');
 
 const ACTIVITY_TYPES = ['CALL', 'EMAIL', 'MEETING', 'NOTE', 'TRANSCRIPT'];
 const SENTIMENT_LABELS = new Set(['POSITIVE', 'NEUTRAL', 'NEGATIVE', 'AT_RISK']);
@@ -103,7 +104,7 @@ async function logCallRecording(user, { contactId, dealId, extraction }) {
 async function scoreSentiment(activityId) {
   const activity = await prisma.activity.findUnique({
     where:  { id: activityId },
-    select: { id: true, notes: true, userId: true, contactId: true, contact: { select: { ownerId: true } } },
+    select: { id: true, notes: true, userId: true, contactId: true, contact: { select: { ownerId: true, sentimentScore: true } } },
   });
   if (!activity?.notes?.trim()) return { skipped: activity ? 'no notes' : 'deleted' };
 
@@ -120,8 +121,9 @@ async function scoreSentiment(activityId) {
     take:    ROLLING_WINDOW,
     select:  { sentimentScore: true },
   });
-  const avg = recent.reduce((sum, a) => sum + a.sentimentScore, 0) / recent.length;
-  await prisma.contact.update({ where: { id: activity.contactId }, data: { sentimentScore: Math.round(avg * 100) / 100 } });
+  const rolling = Math.round((recent.reduce((sum, a) => sum + a.sentimentScore, 0) / recent.length) * 100) / 100;
+  await prisma.contact.update({ where: { id: activity.contactId }, data: { sentimentScore: rolling } });
+  if (Math.abs(rolling - activity.contact.sentimentScore) >= MIN_CHANGE) await snapshot('contact', activity.contactId, 'sentimentScore', rolling);
 
   const owners = [activity.userId, activity.contact.ownerId];
   emitScoped(owners, 'activity:updated', { activityId, contactId: activity.contactId, sentiment: label });
