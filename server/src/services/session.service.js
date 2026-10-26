@@ -179,6 +179,21 @@ async function createInvitation({ email, role, invitedById }) {
   return { invitation, token: raw };
 }
 
+/** A new link for a pending (possibly expired) invitation: the old link stops working, the 72 h start again. */
+async function reissueInvitation(id) {
+  const raw = randomToken();
+  const { count } = await prisma.invitation.updateMany({
+    where: { id, acceptedAt: null, revokedAt: null },
+    data: { tokenHash: sha256(raw), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
+  });
+  if (!count) return null;
+  const invitation = await prisma.invitation.findUnique({
+    where: { id },
+    select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+  });
+  return { invitation, token: raw };
+}
+
 async function findValidInvitation(rawToken) {
   if (!rawToken) return null;
   const invitation = await prisma.invitation.findUnique({ where: { tokenHash: sha256(rawToken) } });
@@ -195,6 +210,7 @@ module.exports = {
   endSession,
   revokeAllForUser,
   createInvitation,
+  reissueInvitation,
   findValidInvitation,
   sha256,
 };

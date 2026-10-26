@@ -3,7 +3,8 @@
  *
  * GET    /api/users/directory          any role — active users for owner pickers
  * GET    /api/users                    ADMIN
- * POST   /api/users/invite             ADMIN
+ * POST   /api/users/invite             ADMIN — emails the link and returns it
+ * POST   /api/users/invitations/:id/resend  ADMIN — new link, emailed again
  * DELETE /api/users/invitations/:id    ADMIN
  * PATCH  /api/users/:id                ADMIN
  */
@@ -34,6 +35,7 @@ router.post('/invite',
     body('role').optional().isIn(ROLES).withMessage(`role must be one of ${ROLES.join(', ')}`),
   ]),
   ctrl.inviteUser);
+router.post('/invitations/:id/resend', ctrl.resendInvitation);
 router.delete('/invitations/:id', ctrl.revokeInvitation);
 router.patch('/:id',
   validate([
