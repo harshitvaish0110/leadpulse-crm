@@ -15,6 +15,7 @@ import { formatDate } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
 import toast from 'react-hot-toast';
 import { apiError } from '../../lib/apiError';
+import { useUrlFlag } from '../../hooks/useUrlFlag';
 
 const STATUS_VARIANT = { DRAFT: 'gray', SENT: 'green', FAILED: 'red', RECEIVED: 'blue' };
 const field = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
@@ -69,7 +70,7 @@ export default function ContactEmails({ contactId, contactName }) {
   const qc = useQueryClient();
   const key = qk.emails.thread(contactId);
   const [dialog, setDialog] = useState(null); // 'new' | 'received' | { edit: email } | { reply: { subject, body, tone } }
-  const [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useUrlFlag('compose');
 
   const { data: emails = [], isLoading } = useQuery({
     queryKey: key,

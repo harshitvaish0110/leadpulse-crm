@@ -33,6 +33,7 @@ import { useDirectory } from '../../hooks/queries/lookups';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 import { apiError } from '../../lib/apiError';
+import { useUrlFlag } from '../../hooks/useUrlFlag';
 
 const TABS = [
   ['overview', 'Overview'], ['activities', 'Activities'], ['deals', 'Deals'],
@@ -204,7 +205,7 @@ export default function ContactDetail() {
   const tab = TABS.some(([key]) => key === params.get('tab')) ? params.get('tab') : 'overview';
   const setTab = (key) => setParams(key === 'overview' ? {} : { tab: key }, { replace: true });
   const [editing, setEditing] = useState(false);
-  const [logging, setLogging] = useState(false);
+  const [logging, setLogging] = useUrlFlag('log');
   const [enriching, setEnriching] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 

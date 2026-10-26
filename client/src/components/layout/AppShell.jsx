@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
+import CommandPalette from './CommandPalette';
 import ErrorBoundary from '../ErrorBoundary';
 import { useSocket } from '../../hooks/useSocket';
 import { useWorkspace } from '../../hooks/queries/lookups';
@@ -39,6 +40,7 @@ export default function AppShell({ fallback = null }) {
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       <Sidebar />
+      <CommandPalette />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar title={title} />
         <main className="flex-1 overflow-y-auto">
