@@ -7,8 +7,8 @@ import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import { humanize } from '../../lib/format';
 import toast from 'react-hot-toast';
+import { apiError } from '../../lib/apiError';
 
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 function ProfileForm({ user }) {
   const updateUser = useAuthStore((s) => s.updateUser);

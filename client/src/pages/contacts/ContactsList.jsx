@@ -20,11 +20,11 @@ import { useDirectory, useTags } from '../../hooks/queries/lookups';
 import { useUrlFilters } from '../../hooks/useUrlFilters';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
+import { apiError } from '../../lib/apiError';
 
 const FILTER_DEFAULTS = { q: '', status: '', owner: '', tag: '', score: '', risk: '', sort: 'createdAt:desc', page: '1' };
 const PAGE_SIZE = 25;
 const selectClass = 'text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white';
-const apiError = (err, fallback) => err.response?.data?.details?.[0]?.msg || err.response?.data?.error || fallback;
 
 /** Query params for the list and export endpoints. */
 const toQuery = (f) => {
