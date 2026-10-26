@@ -10,6 +10,7 @@
 
 'use strict';
 
+const { logger } = require('./logger');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 
@@ -56,7 +57,7 @@ async function sendEmail({ to, subject, text, html, replyTo }) {
 
   const info = await (await transport()).sendMail({ from: from(), to, subject, text, html, replyTo });
   const previewUrl = nodemailer.getTestMessageUrl(info) || null;
-  if (previewUrl) console.log(`[Mailer] Preview: ${previewUrl}`);
+  if (previewUrl) logger.info({ event: 'email_preview', previewUrl }, 'Email preview available');
   return { id: info.messageId ?? null, previewUrl };
 }
 

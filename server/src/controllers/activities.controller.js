@@ -11,6 +11,7 @@ const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 const { scoped, scopeFor } = require('../middleware/auth.middleware');
 const { ml } = require('../lib/mlClient');
+const { logger } = require('../lib/logger');
 const activities = require('../services/activities.service');
 
 const { ACTIVITY_INCLUDE } = activities;
@@ -108,7 +109,7 @@ async function uploadAudio(req, res) {
     try {
       ({ data: extraction } = await ml.post('/transcribe/', form, { timeout: 120_000 }));
     } catch (err) {
-      console.warn('[Transcribe] ML service unavailable:', err.message);
+      logger.warn({ event: 'transcription_unavailable', err: err.message }, 'Transcription unavailable');
       extraction = FALLBACK_EXTRACTION;
     }
 

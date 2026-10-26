@@ -7,6 +7,8 @@
 
 'use strict';
 
+const { logger } = require('../lib/logger');
+
 /**
  * Structured API error. Controllers throw these to set a status and code.
  */
@@ -60,7 +62,7 @@ function notFoundHandler(req, res) {
 function errorHandler(err, req, res, _next) {
   if (res.headersSent) {
     // Streaming responses (SSE) can fail after headers are sent; just end the stream.
-    console.error('[ERROR after headers sent]', err);
+    (req.log ?? logger).error({ err }, 'Error after the response started');
     return res.end();
   }
 
@@ -101,7 +103,7 @@ function errorHandler(err, req, res, _next) {
   }
 
   // ── Unknown ───────────────────────────────────────────────────────────────
-  console.error(`[ERROR] ${req.method} ${req.originalUrl} (${req.id || '-'})`, err);
+  (req.log ?? logger).error({ err, requestId: req.id }, `Unhandled error on ${req.method} ${req.path}`);
   res.status(500).json({
     success: false,
     error: 'Internal Server Error',
