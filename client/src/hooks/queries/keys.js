@@ -50,4 +50,13 @@ export const qk = {
     all: ['users'],
     directory: ['users', 'directory'],
   },
+  settings: {
+    all: ['settings'],
+    workspace: ['settings', 'workspace'],
+    stages: ['settings', 'pipeline-stages'],
+    tags: ['settings', 'tags'],
+    customFields: (entity) => ['settings', 'custom-fields', entity],
+    integrations: ['settings', 'integrations'],
+    webhooks: ['settings', 'webhooks'],
+  },
 };

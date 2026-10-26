@@ -4,6 +4,8 @@ import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import ErrorBoundary from '../ErrorBoundary';
 import { useSocket } from '../../hooks/useSocket';
+import { useWorkspace } from '../../hooks/queries/lookups';
+import { setCurrency } from '../../lib/format';
 
 const PAGE_TITLES = {
   '/dashboard':             'Dashboard',
@@ -23,6 +25,10 @@ export default function AppShell({ fallback = null }) {
   // One authenticated Socket.IO connection for the signed-in user.
   useSocket();
 
+  // Amounts render in the workspace currency, so pages wait for it (one small request).
+  const { data: workspace, isPending } = useWorkspace();
+  setCurrency(workspace?.currency);
+
   const title = Object.entries(PAGE_TITLES).find(([path]) => location.pathname.startsWith(path))?.[1] || 'LeadPulse';
 
   useEffect(() => {
@@ -36,10 +42,11 @@ export default function AppShell({ fallback = null }) {
         <TopBar title={title} />
         <main className="flex-1 overflow-y-auto">
           <div className="p-6">
-            {/* Keyed by path: navigating away from a crashed page clears the error. */}
-            <ErrorBoundary key={location.pathname}>
+            {/* Keyed by path: navigating away from a crashed page clears the error.
+                And by currency: a changed currency re-renders every amount on the page. */}
+            <ErrorBoundary key={`${location.pathname}:${workspace?.currency}`}>
               <Suspense fallback={fallback}>
-                <Outlet />
+                {isPending ? fallback : <Outlet />}
               </Suspense>
             </ErrorBoundary>
           </div>

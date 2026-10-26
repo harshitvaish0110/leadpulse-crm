@@ -3,16 +3,27 @@
  * module turns them into percentages.
  */
 
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+let currency = 'USD';
+const formats = new Map();
+const formatter = (options) => {
+  const key = `${currency}:${JSON.stringify(options)}`;
+  if (!formats.has(key)) formats.set(key, new Intl.NumberFormat('en-US', { style: 'currency', currency, ...options }));
+  return formats.get(key);
+};
 
-/** $950 · $12K · $1.2M (compact by default; `{ compact: false }` for full amounts). */
+/** The workspace currency (ISO code); AppShell sets it from the workspace settings. */
+export function setCurrency(code) {
+  currency = code || 'USD';
+}
+
+/** "$", "€", "₹" — for form labels. */
+export const currencySymbol = () => formatter({ maximumFractionDigits: 0 }).formatToParts(0).find((p) => p.type === 'currency')?.value ?? currency;
+
+/** $950 · $12K · $1.3M in the workspace currency (compact by default; `{ compact: false }` for full amounts). */
 export function formatCurrency(value, { compact = true } = {}) {
   const n = Number(value) || 0;
-  if (!compact) return usd.format(n);
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `$${Math.round(n / 1_000)}K`;
-  return usd.format(n);
+  if (!compact || Math.abs(n) < 1_000) return formatter({ maximumFractionDigits: 0 }).format(n);
+  return formatter({ notation: 'compact', maximumFractionDigits: Math.abs(n) >= 1_000_000 ? 1 : 0 }).format(n);
 }
 
 /** 0–1 probability → whole-number percentage (for widths, gauges, thresholds). */

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { Users, TrendingUp, DollarSign, Target, Zap, ArrowRight } from 'lucide-react';
+import { Users, TrendingUp, Banknote, Target, Zap, ArrowRight } from 'lucide-react';
 import { getRevenue, getPipeline, getOverview, getAtRisk } from '../api/analytics';
 import { getActivities } from '../api/activities';
 import api from '../api/axiosInstance';
@@ -167,7 +167,7 @@ export default function Dashboard() {
           value={s.totalContacts?.toLocaleString() ?? '–'} sub={`+${s.newContactsThisMonth ?? 0} this month`} />
         <MetricCard icon={TrendingUp} label="Open deals" color="purple" loading={isLoading}
           value={s.openDeals?.toLocaleString() ?? '–'} sub={`of ${s.totalDeals ?? 0} total`} />
-        <MetricCard icon={DollarSign} label="Revenue this month" color="green" loading={isLoading}
+        <MetricCard icon={Banknote} label="Revenue this month" color="green" loading={isLoading}
           value={s.revenueThisMonth != null ? formatCurrency(s.revenueThisMonth) : '–'} sub="Deals won since the 1st" />
         <MetricCard icon={Target} label="Win rate" color="amber" loading={isLoading}
           value={s.winRate != null ? formatPercent(s.winRate) : '–'} sub={`${s.won ?? 0} won / ${s.lost ?? 0} lost · last 12 months`} />

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { formatCurrency, formatDate, formatPercent, timeAgo, toPercent } from './format';
+import { currencySymbol, formatCurrency, formatDate, formatPercent, setCurrency, timeAgo, toPercent } from './format';
 import { parseEmail } from './email';
 import { renderMarkdown } from './markdown';
 import { createSSEParser } from './sse';
@@ -11,6 +11,18 @@ describe('format', () => {
     expect(formatCurrency(1_250_000)).toBe('$1.3M');
     expect(formatCurrency('2500.50', { compact: false })).toBe('$2,501');
     expect(formatCurrency(null)).toBe('$0');
+  });
+
+  it('uses the workspace currency', () => {
+    setCurrency('EUR');
+    try {
+      expect(formatCurrency(12_400)).toBe('€12K');
+      expect(formatCurrency(950)).toBe('€950');
+      expect(currencySymbol()).toBe('€');
+    } finally {
+      setCurrency('USD');
+    }
+    expect(currencySymbol()).toBe('$');
   });
 
   it('treats probabilities as 0–1 and clamps them', () => {
