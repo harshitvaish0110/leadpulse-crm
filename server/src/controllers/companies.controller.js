@@ -7,6 +7,8 @@
 const { prisma }   = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 const { scoped, scopeFor } = require('../middleware/auth.middleware');
+const { afterCompanyChange } = require('../queues/triggers');
+const { removeFromIndex } = require('../services/semanticIndex.service');
 
 const COMPANY_LIST_INCLUDE = {
   _count: { select: { contacts: true } },
@@ -94,6 +96,7 @@ async function create(req, res, next) {
       include: COMPANY_LIST_INCLUDE,
     });
 
+    afterCompanyChange(company.id);
     res.status(201).json({ success: true, company });
   } catch (err) {
     next(err);
@@ -137,6 +140,7 @@ async function update(req, res, next) {
       include: COMPANY_LIST_INCLUDE,
     });
 
+    afterCompanyChange(company.id);
     res.json({ success: true, company });
   } catch (err) {
     next(err);
@@ -154,6 +158,7 @@ async function remove(req, res, next) {
     }
 
     await prisma.company.delete({ where: { id: req.params.id } });
+    await removeFromIndex({ company: [req.params.id] });
     res.json({ success: true, message: 'Company deleted' });
   } catch (err) {
     next(err);

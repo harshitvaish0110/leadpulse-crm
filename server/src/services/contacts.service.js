@@ -9,6 +9,8 @@ const { audit } = require('../lib/audit');
 const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor, isPrivileged, resolveOwnerId } = require('../middleware/auth.middleware');
 const { emitScoped } = require('../lib/realtime');
+const { afterContactChange, afterBulkChange, reindex } = require('../queues/triggers');
+const { removeFromIndex } = require('./semanticIndex.service');
 
 const STATUSES = ['LEAD', 'ACTIVE', 'INACTIVE', 'CHURNED'];
 const EDITABLE = ['firstName', 'lastName', 'email', 'phone', 'title', 'linkedinUrl', 'status', 'companyId', 'tags', 'customFields'];
@@ -61,6 +63,7 @@ async function createContact(user, input) {
     include: CONTACT_LIST_INCLUDE,
   });
   emitScoped([contact.ownerId], 'contact:created', { contactId: contact.id });
+  afterContactChange(contact.id, { created: true });
   return contact;
 }
 
@@ -89,17 +92,29 @@ async function updateContact(user, contactId, input, req) {
 
   // A reassigned contact also disappears from the previous owner's views.
   emitScoped([contact.ownerId, before.ownerId], 'contact:updated', { contactId: contact.id });
+  afterContactChange(contact.id);
   return contact;
+}
+
+/** Index entries of contacts and of the deals and activities that are deleted with them (read before deleting). */
+async function indexEntriesOf(contactIds) {
+  const [deals, activities] = await Promise.all([
+    prisma.deal.findMany({ where: { contactId: { in: contactIds } }, select: { id: true } }),
+    prisma.activity.findMany({ where: { contactId: { in: contactIds } }, select: { id: true } }),
+  ]);
+  return { contact: contactIds, deal: deals.map((d) => d.id), activity: activities.map((a) => a.id) };
 }
 
 async function deleteContact(user, contactId, req) {
   const where = { id: contactId, ...scopeFor(user, 'contact') };
   const snapshot = await prisma.contact.findFirst({ where });
   if (!snapshot) throw ApiError.notFound('Contact not found');
+  const indexed = await indexEntriesOf([contactId]);
   await prisma.$transaction(async (tx) => {
     await audit(req, { action: 'delete', entityType: 'contact', entityId: contactId, before: snapshot }, tx);
     await tx.contact.delete({ where });
   });
+  await removeFromIndex(indexed);
   emitScoped([snapshot.ownerId], 'contact:deleted', { contactId });
 }
 
@@ -127,6 +142,7 @@ async function bulkAction(user, { ids, action, ownerId, tag }, req) {
     const { count } = await prisma.contact.updateMany({ where: { id: { in: targetIds } }, data: { ownerId: newOwner } });
     await audit(req, { action: 'bulk_assign', entityType: 'contact', after: { ids: targetIds, ownerId: newOwner } });
     emitScoped([...owners, newOwner], 'contact:updated', { contactIds: targetIds });
+    targetIds.forEach((id) => reindex('contact', id));
     return { updated: count, skipped };
   }
 
@@ -140,15 +156,18 @@ async function bulkAction(user, { ids, action, ownerId, tag }, req) {
           WHERE "id" = ANY(${targetIds}::text[]) AND ${name} = ANY("tags")`;
     if (action === 'tag') await prisma.tag.upsert({ where: { name }, create: { name }, update: {} });
     emitScoped(owners, 'contact:updated', { contactIds: targetIds });
+    targetIds.forEach((id) => reindex('contact', id));
     return { updated: count, skipped: skipped + (targetIds.length - count) };
   }
 
   // delete
   const snapshots = await prisma.contact.findMany({ where: { id: { in: targetIds } } });
+  const indexed = await indexEntriesOf(targetIds);
   await prisma.$transaction(async (tx) => {
     for (const before of snapshots) await audit(req, { action: 'delete', entityType: 'contact', entityId: before.id, before }, tx);
     await tx.contact.deleteMany({ where: { id: { in: targetIds } } });
   });
+  await removeFromIndex(indexed);
   emitScoped(owners, 'contact:deleted', { contactIds: targetIds });
   return { updated: snapshots.length, skipped };
 }
@@ -247,7 +266,10 @@ async function importContacts(user, rows) {
     }
   }
 
-  if (result.created || result.updated) emitScoped([user.id], 'contact:created', { imported: result.created + result.updated });
+  if (result.created || result.updated) {
+    emitScoped([user.id], 'contact:created', { imported: result.created + result.updated });
+    afterBulkChange();
+  }
   return result;
 }
 

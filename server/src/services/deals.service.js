@@ -13,6 +13,8 @@ const { prisma } = require('../lib/prisma');
 const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor, assertContactInScope, resolveOwnerId } = require('../middleware/auth.middleware');
 const { emitScoped } = require('../lib/realtime');
+const { afterDealChange } = require('../queues/triggers');
+const { removeFromIndex } = require('./semanticIndex.service');
 
 const DEAL_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
@@ -98,6 +100,7 @@ async function createDeal(user, input) {
   });
 
   emitDeal(deal, 'deal:created', { dealId: deal.id, stage: deal.stage });
+  afterDealChange(deal);
   return deal;
 }
 
@@ -142,6 +145,7 @@ async function changeStage(user, dealId, target) {
       toStage:   result.deal.stage,
       value:     Number(result.deal.value),
     });
+    afterDealChange(result.deal);
   }
   return result.deal;
 }
@@ -168,6 +172,7 @@ async function updateDeal(user, dealId, input) {
   if (Object.keys(data).length) {
     deal = await prisma.deal.update({ where: { id: dealId, ...scopeFor(user, 'deal') }, data, include: DEAL_LIST_INCLUDE });
     emitDeal(deal, 'deal:updated', { dealId: deal.id });
+    afterDealChange(deal);
   }
   return deal ?? prisma.deal.findFirstOrThrow({ where: { id: dealId, ...scopeFor(user, 'deal') }, include: DEAL_LIST_INCLUDE });
 }
@@ -175,9 +180,11 @@ async function updateDeal(user, dealId, input) {
 async function deleteDeal(user, dealId) {
   const deal = await prisma.deal.delete({
     where:  { id: dealId, ...scopeFor(user, 'deal') },
-    select: { id: true, ownerId: true, contact: { select: { ownerId: true } } },
+    select: { id: true, ownerId: true, contactId: true, stage: true, contact: { select: { ownerId: true } } },
   });
+  await removeFromIndex({ deal: [deal.id] });
   emitDeal(deal, 'deal:deleted', { dealId: deal.id });
+  afterDealChange(deal, { deleted: true });
 }
 
 module.exports = { DEAL_STAGES, DEAL_LIST_INCLUDE, createDeal, changeStage, updateDeal, deleteDeal };
