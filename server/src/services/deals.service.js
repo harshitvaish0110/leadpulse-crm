@@ -15,6 +15,7 @@ const { scopeFor, assertContactInScope, resolveOwnerId } = require('../middlewar
 const { emitScoped } = require('../lib/realtime');
 const { afterDealChange } = require('../queues/triggers');
 const { removeFromIndex } = require('./semanticIndex.service');
+const { applyCustomFields } = require('./customFields.service');
 
 const DEAL_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION', 'CLOSED_WON', 'CLOSED_LOST'];
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
@@ -77,6 +78,7 @@ async function createDeal(user, input) {
   const ownerId = (await resolveOwnerId(user, input.ownerId)) ?? user.id;
   const value = parseValue(input.value) ?? 0;
   const expectedCloseDate = parseDate(input.expectedCloseDate, 'expectedCloseDate') ?? null;
+  const customFields = await applyCustomFields('DEAL', input.customFields, null, { creating: true });
   const now = new Date();
 
   const deal = await prisma.$transaction(async (tx) => {
@@ -88,7 +90,7 @@ async function createDeal(user, input) {
       data: {
         title: title.trim(), value, expectedCloseDate,
         notes: notes || null, lostReason: lostReason || null,
-        contactId, ownerId,
+        contactId, ownerId, customFields,
         ...target, ...stageEffects(target.stage, now),
       },
       include: DEAL_LIST_INCLUDE,
@@ -164,6 +166,11 @@ async function updateDeal(user, dealId, input) {
   const expectedCloseDate = parseDate(input.expectedCloseDate, 'expectedCloseDate');
   if (expectedCloseDate !== undefined) data.expectedCloseDate = expectedCloseDate;
   if (input.ownerId !== undefined) data.ownerId = await resolveOwnerId(user, input.ownerId);
+  if (input.customFields !== undefined) {
+    const current = await prisma.deal.findFirst({ where: { id: dealId, ...scopeFor(user, 'deal') }, select: { customFields: true } });
+    if (!current) throw ApiError.notFound('Deal not found');
+    data.customFields = await applyCustomFields('DEAL', input.customFields, current.customFields);
+  }
 
   let deal = null;
   if (input.stage !== undefined || input.pipelineStageId !== undefined) {

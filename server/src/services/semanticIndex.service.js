@@ -16,6 +16,7 @@ const { prisma } = require('../lib/prisma');
 const { logger } = require('../lib/logger');
 const { ml } = require('../lib/mlClient');
 const { isPrivileged } = require('../middleware/auth.middleware');
+const { money } = require('../lib/workspace');
 
 const TYPES = ['contact', 'deal', 'company', 'activity'];
 const CLOSED = ['CLOSED_WON', 'CLOSED_LOST'];
@@ -31,7 +32,6 @@ const RARE_SHARE = 0.02;
 
 // ── Text templates ─────────────────────────────────────────────────────────────
 const fullName = (p) => (p ? `${p.firstName} ${p.lastName}` : 'unassigned');
-const money = (v) => `$${Math.round(Number(v || 0)).toLocaleString('en-US')}`;
 const pct = (p) => `${Math.round((p ?? 0) * 100)}%`;
 const day = (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'not set');
 const clip = (s, n) => {
