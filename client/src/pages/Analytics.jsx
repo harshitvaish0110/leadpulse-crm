@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { DollarSign, TrendingUp, Target, Award } from 'lucide-react';
+import { Banknote, TrendingUp, Target, Award } from 'lucide-react';
 import api from '../api/axiosInstance';
 import Skeleton from '../components/ui/Skeleton';
 import ErrorBoundary from '../components/ErrorBoundary';
@@ -113,7 +113,7 @@ export default function Analytics() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard icon={DollarSign} label="Revenue" color="green" value={revenue.data ? formatCurrency(revenue.data.totalRevenue) : '–'}
+        <StatCard icon={Banknote} label="Revenue" color="green" value={revenue.data ? formatCurrency(revenue.data.totalRevenue) : '–'}
           sub={revenue.data ? `Avg ${formatCurrency(revenue.data.avgMonthly)} / month` : ''} />
         <StatCard icon={TrendingUp} label="Open pipeline" color="indigo" value={pipeline.data ? formatCurrency(pipeline.data.totalPipelineValue) : '–'} sub="All open deals today" />
         <StatCard icon={Target} label="Win rate" color="amber" value={winLoss.data ? formatPercent(winLoss.data.winRate) : '–'}

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '../../store/uiStore';
 import { useAuthStore } from '../../store/authStore';
+import { useWorkspace } from '../../hooks/queries/lookups';
 
 const NAV_ITEMS = [
   { label: 'Dashboard',     href: '/dashboard',        icon: LayoutDashboard },
@@ -21,6 +22,7 @@ export default function Sidebar() {
   const { sidebarOpen, toggleSidebar } = useUIStore();
   const isAdmin = useAuthStore((s) => s.user?.role === 'ADMIN');
   const { pathname } = useLocation();
+  const { data: workspace } = useWorkspace();
   // Admins land on workspace settings; everyone else on their profile.
   const items = [...NAV_ITEMS, { label: 'Settings', href: isAdmin ? '/settings/general' : '/settings/profile', match: '/settings', icon: Settings }];
 
@@ -69,8 +71,10 @@ export default function Sidebar() {
         {/* Bottom user info */}
         <div className="px-3 pb-4 border-t border-gray-800 pt-4">
           <div className="flex items-center gap-2 px-3 py-2 text-gray-400 text-xs">
-            <div className="w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center text-white text-xs font-bold">L</div>
-            <span>LeadPulse v1.0</span>
+            <div className="w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center text-white text-xs font-bold" aria-hidden="true">
+              {(workspace?.companyName || 'L').charAt(0).toUpperCase()}
+            </div>
+            <span className="truncate">{workspace?.companyName || 'LeadPulse'}</span>
           </div>
         </div>
       </aside>
