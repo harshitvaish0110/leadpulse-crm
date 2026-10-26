@@ -15,6 +15,7 @@ const { getJSON, setJSON } = require('../lib/redis');
 const { emitScoped } = require('../lib/realtime');
 const scoring = require('./scoring.service');
 const activities = require('./activities.service');
+const nextActions = require('./nextAction.service');
 const forecast = require('./forecast.service');
 const semanticIndex = require('./semanticIndex.service');
 
@@ -80,6 +81,7 @@ async function runNightly({ force = false, now = new Date() } = {}) {
   await stage('winProbability', () => scoring.scoreOpenDeals());
   await stage('leadScores', () => scoring.scoreLeads(contacts, now));
   await stage('snapshots', () => scoring.writeSnapshots(contacts.map((c) => c.id), now));
+  await stage('nextActions', () => nextActions.refreshNextActions());
   await stage('forecast', () => forecast.warmForecasts(now));
   await stage('reindex', () => semanticIndex.reindexAll());
   await stage('housekeeping', () => housekeeping(now));

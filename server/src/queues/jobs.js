@@ -16,6 +16,7 @@ const semanticIndex = require('../services/semanticIndex.service');
 const forecast = require('../services/forecast.service');
 const nightly = require('../services/nightly.service');
 const tasks = require('../services/tasks.service');
+const nextActions = require('../services/nextAction.service');
 
 const handlers = {
   sentiment:         ({ activityId }) => activities.scoreSentiment(activityId),
@@ -26,6 +27,7 @@ const handlers = {
   forecast:          (data) => forecast.computeForecast(data),
   nightly:           ({ force }) => nightly.runNightly({ force: Boolean(force) }),
   'task-reminders':  () => tasks.sendReminders(),
+  'nba-batch':       () => nextActions.refreshNextActions(),
 };
 
 module.exports = { handlers };
