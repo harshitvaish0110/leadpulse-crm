@@ -13,7 +13,7 @@ import { refreshSession } from '../api/axiosInstance';
 import { qk } from './queries/keys';
 import toast from 'react-hot-toast';
 
-const TOAST_TYPES = new Set(['task', 'churn', 'ai_action']);
+const TOAST_TYPES = new Set(['task', 'churn', 'transcript']);
 
 // Empty = same origin (the Vite dev proxy forwards /socket.io).
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || undefined;
@@ -54,7 +54,7 @@ export function useSocket() {
     ['deal:created', 'deal:updated', 'deal:deleted', 'deal:stage_changed', 'deal:score_updated'].forEach((event) => {
       socket.on(event, () => refresh(qk.deals.all, qk.analytics.all));
     });
-    ['activity:created', 'activity:updated', 'activity:deleted'].forEach((event) => {
+    ['activity:created', 'activity:updated', 'activity:deleted', 'activity:transcribed'].forEach((event) => {
       socket.on(event, () => refresh(qk.activities.all, qk.contacts.all));
     });
     ['contact:created', 'contact:updated', 'contact:deleted', 'contact:churn_alert'].forEach((event) => {
