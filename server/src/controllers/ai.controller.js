@@ -4,22 +4,27 @@
  * Loads scoped CRM records, builds a prompt (services/ai/prompts.js) and sends
  * it through the AI gateway, which handles provider fallback, logging and
  * streaming. Every record lookup is scoped to the caller: out of scope is 404.
+ * Validation happens before a stream starts, so it fails with a normal JSON error.
  */
 
 'use strict';
 
-const axios = require('axios');
 const { prisma } = require('../lib/prisma');
-const { logger } = require('../lib/logger');
 const ai = require('../services/ai');
 const prompts = require('../services/ai/prompts');
+const scoring = require('../services/scoring.service');
+const enrichment = require('../services/enrichment.service');
 const semanticIndex = require('../services/semanticIndex.service');
+const { recommendNextAction } = require('../services/nextAction.service');
+const { DEAL_STAGES } = require('../services/deals.service');
 const { enqueue } = require('../queues/queue');
 const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor } = require('../middleware/auth.middleware');
 
-const TONES = ['professional', 'casual', 'urgent'];
-const RECENT_ACTIVITIES = { orderBy: { occurredAt: 'desc' }, select: { type: true, notes: true, sentiment: true, occurredAt: true } };
+const RECENT_ACTIVITIES = { orderBy: { occurredAt: 'desc' }, select: { type: true, subject: true, notes: true, sentiment: true, occurredAt: true } };
+const EMAIL_FIELDS = { direction: true, subject: true, body: true, sentAt: true, receivedAt: true, createdAt: true };
+const DEAL_FIELDS = { id: true, title: true, stage: true, value: true, winProbability: true, pipelineStage: { select: { label: true } } };
+const invalid = (path, msg) => ApiError.validation([{ path, msg }]);
 
 /** Contact lookup limited to the caller's scope (404 otherwise). */
 async function findContact(user, contactId, args) {
@@ -29,8 +34,8 @@ async function findContact(user, contactId, args) {
   return contact;
 }
 
-function checkTone(tone) {
-  if (!TONES.includes(tone)) throw ApiError.validation([{ path: 'tone', msg: `tone must be one of: ${TONES.join(', ')}` }]);
+function checkTone(tone, allowed) {
+  if (!allowed.includes(tone)) throw invalid('tone', `tone must be one of: ${allowed.join(', ')}`);
   return tone;
 }
 
@@ -38,112 +43,161 @@ function checkTone(tone) {
 async function chat(req, res) {
   const question = String(req.body?.question ?? '').trim();
   if (!question) throw ApiError.badRequest('question is required');
-  if (question.length > 2000) throw ApiError.validation([{ path: 'question', msg: 'question is too long (max 2000 characters)' }]);
+  if (question.length > 2000) throw invalid('question', 'question is too long (max 2000 characters)');
 
   await ai.streamToResponse(res, prompts.chat({ question }), { log: { userId: req.user.id, input: { question } } });
 }
 
-/** POST /api/ai/compose-email { contactId, bulletPoints[] | context, tone } → { draft: { subject, body } } */
+/**
+ * POST /api/ai/compose-email { contactId, dealId?, bulletPoints[1..10], tone } — SSE.
+ * The text starts with "Subject: …", then a blank line, then the body.
+ */
 async function composeEmail(req, res) {
-  const { contactId, context, bulletPoints, tone = 'professional' } = req.body ?? {};
-  checkTone(tone);
-  const points = (Array.isArray(bulletPoints) ? bulletPoints : [context])
-    .map((p) => String(p ?? '').trim()).filter(Boolean).slice(0, 10).map((p) => p.slice(0, 300));
-  const contact = await findContact(req.user, contactId, {
-    include: { company: { select: { name: true, industry: true } }, activities: { ...RECENT_ACTIVITIES, take: 3 } },
-  });
+  const { contactId, dealId, tone = 'professional' } = req.body ?? {};
+  checkTone(tone, prompts.EMAIL_TONES);
+  const points = (Array.isArray(req.body?.bulletPoints) ? req.body.bulletPoints : []).map((p) => String(p ?? '').trim()).filter(Boolean);
+  if (!points.length || points.length > 10) throw invalid('bulletPoints', 'Give between 1 and 10 points to cover');
+  if (points.some((p) => p.length > 300)) throw invalid('bulletPoints', 'Each point can be at most 300 characters');
 
-  const { data } = await ai.getJSON(prompts.composeEmail({ contact, points, tone }), {
-    log: { userId: req.user.id, contactId, input: { contactId, tone, points } },
+  const contact = await findContact(req.user, contactId, {
+    include: {
+      company: { select: { name: true, industry: true } },
+      activities: { ...RECENT_ACTIVITIES, take: 3 },
+      deals: { where: { stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] } }, select: DEAL_FIELDS },
+    },
   });
-  res.json({ success: true, draft: data });
+  let deal;
+  if (dealId) {
+    deal = await prisma.deal.findFirst({ where: { id: dealId, contactId: contact.id, ...scopeFor(req.user, 'deal') }, select: DEAL_FIELDS });
+    if (!deal) throw ApiError.notFound('Deal not found');
+  } else {
+    // The most advanced open deal is the one the email is most likely about.
+    deal = [...contact.deals].sort((a, b) => DEAL_STAGES.indexOf(b.stage) - DEAL_STAGES.indexOf(a.stage))[0] ?? null;
+  }
+
+  await ai.streamToResponse(res, prompts.composeEmail({ contact, deal, points, tone }), {
+    log: { userId: req.user.id, contactId: contact.id, dealId: deal?.id ?? null, input: { contactId, dealId: deal?.id ?? null, tone, points } },
+  });
 }
 
-/** POST /api/ai/deal-summary/:id — SSE. */
+/** POST /api/ai/deal-summary/:id — SSE: four markdown sections. */
 async function dealSummary(req, res) {
   const deal = await prisma.deal.findFirst({
     where: { id: req.params.id, ...scopeFor(req.user, 'deal') },
     include: {
-      contact:    { select: { firstName: true, lastName: true, company: { select: { name: true } } } },
-      owner:      { select: { firstName: true, lastName: true } },
-      activities: { ...RECENT_ACTIVITIES, take: 10 },
+      contact:      { select: { firstName: true, lastName: true, title: true, company: { select: { name: true } } } },
+      owner:        { select: { firstName: true, lastName: true } },
+      pipelineStage: { select: { label: true } },
+      stageHistory: { orderBy: { changedAt: 'asc' }, take: 10, select: { fromStage: true, toStage: true, changedAt: true } },
+      activities:   { ...RECENT_ACTIVITIES, take: 10 },
     },
   });
   if (!deal) throw ApiError.notFound('Deal not found');
+  const emails = await prisma.emailDraft.findMany({
+    where: { OR: [{ dealId: deal.id }, { contactId: deal.contactId }] },
+    orderBy: { createdAt: 'desc' }, take: 5, select: EMAIL_FIELDS,
+  });
 
-  await ai.streamToResponse(res, prompts.dealSummary({ deal }), {
+  await ai.streamToResponse(res, prompts.dealSummary({ deal, emails }), {
     log: { userId: req.user.id, dealId: deal.id, contactId: deal.contactId, input: { dealId: deal.id } },
   });
 }
 
-/** POST /api/ai/smart-reply { emailThread, tone, contactId? } → { reply, tone } */
-async function smartReply(req, res) {
-  const { contactId, tone = 'professional' } = req.body ?? {};
-  checkTone(tone);
-  const thread = String(req.body?.emailThread ?? req.body?.emailContent ?? '').trim().slice(0, 8000);
-  if (!thread) throw ApiError.badRequest('emailThread is required');
-
-  const contact = contactId
-    ? await findContact(req.user, contactId, { select: { firstName: true, lastName: true, company: { select: { name: true } } } })
-    : null;
-
-  const { data } = await ai.getJSON(prompts.smartReply({ thread, tone, contact }), {
-    log: { userId: req.user.id, contactId: contactId || null, input: { contactId, tone } },
+/** "0.62 → 0.48 over 90 days", from the contact's sentiment snapshots. */
+async function sentimentTrend(contactId) {
+  const points = await prisma.scoreSnapshot.findMany({
+    where: { entityType: 'contact', entityId: contactId, metric: 'sentimentScore', takenAt: { gte: new Date(Date.now() - 90 * 86_400_000) } },
+    orderBy: { takenAt: 'asc' }, select: { value: true, takenAt: true },
   });
-  res.json({ success: true, tone, reply: data.reply });
+  if (points.length < 2) return null;
+  const days = Math.round((points.at(-1).takenAt - points[0].takenAt) / 86_400_000);
+  return `${points[0].value.toFixed(2)} → ${points.at(-1).value.toFixed(2)} over ${days} days`;
 }
 
-/** POST /api/ai/next-action{/:id} { contactId?, dealId? } → { recommendation } */
+/** POST /api/ai/contact-narrative/:id — SSE: the relationship in prose. */
+async function contactNarrative(req, res) {
+  const contact = await findContact(req.user, req.params.id, {
+    include: {
+      company: { select: { name: true } },
+      owner:   { select: { firstName: true, lastName: true } },
+      deals:   { orderBy: { createdAt: 'desc' }, take: 10, select: DEAL_FIELDS },
+    },
+  });
+  const [activities, emailCount, trend] = await Promise.all([
+    prisma.activity.findMany({ where: { contactId: contact.id }, ...RECENT_ACTIVITIES, take: 15 }),
+    prisma.emailDraft.count({ where: { contactId: contact.id } }),
+    sentimentTrend(contact.id),
+  ]);
+
+  await ai.streamToResponse(res, prompts.contactNarrative({ contact, activities, emailCount, sentimentTrend: trend }), {
+    log: { userId: req.user.id, contactId: contact.id, input: { contactId: contact.id } },
+  });
+}
+
+/** POST /api/ai/smart-reply { contactId?, emailId, tone } → { reply } for a received email. */
+async function smartReply(req, res) {
+  const { contactId, emailId, tone = 'professional' } = req.body ?? {};
+  checkTone(tone, prompts.REPLY_TONES);
+  if (!emailId) throw ApiError.badRequest('emailId is required');
+
+  const email = await prisma.emailDraft.findFirst({
+    where: { id: emailId, ...scopeFor(req.user, 'emailDraft'), ...(contactId && { contactId }) },
+    include: { contact: { select: { id: true, firstName: true, lastName: true, company: { select: { name: true } } } } },
+  });
+  if (!email) throw ApiError.notFound('Email not found');
+  if (email.direction !== 'INBOUND') throw invalid('emailId', 'Smart replies answer received emails');
+
+  const thread = (await prisma.emailDraft.findMany({
+    where: { contactId: email.contactId, createdAt: { lt: email.createdAt } },
+    orderBy: { createdAt: 'desc' }, take: 3, select: EMAIL_FIELDS,
+  })).reverse();
+
+  const { text, provider } = await ai.getText(prompts.smartReply({ tone, email, thread, contact: email.contact }), {
+    log: { userId: req.user.id, contactId: email.contactId, input: { tone, emailId } },
+  });
+  if (!text) throw new ApiError('The AI returned an empty reply. Please try again.', 502, 'AI_BAD_OUTPUT');
+  res.json({ success: true, tone, reply: text, provider });
+}
+
+/** POST /api/ai/next-action{/:id} { contactId?, dealId? } → stored { recommendation, generatedAt }. */
 async function nextAction(req, res) {
   const body = req.body ?? {};
   const contactId = req.params.id || body.contactId;
-  const dealId = body.dealId;
+  const dealId = body.dealId || null;
   if (!contactId && !dealId) throw ApiError.badRequest('contactId or dealId required');
 
   const deal = dealId
-    ? await prisma.deal.findFirst({ where: { id: dealId, ...scopeFor(req.user, 'deal') }, select: { title: true, stage: true, value: true, winProbability: true, contactId: true } })
+    ? await prisma.deal.findFirst({ where: { id: dealId, ...scopeFor(req.user, 'deal') }, select: { contactId: true } })
     : null;
   if (dealId && !deal) throw ApiError.notFound('Deal not found');
+  const contact = await findContact(req.user, contactId || deal.contactId, { select: { id: true } });
+  if (deal && deal.contactId !== contact.id) throw invalid('dealId', 'Deal does not belong to this contact');
 
-  const contact = await findContact(req.user, contactId || deal.contactId, {
-    include: {
-      company:    { select: { name: true } },
-      activities: { ...RECENT_ACTIVITIES, take: 5 },
-      deals:      { where: { stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] } }, select: { title: true, stage: true, value: true } },
-    },
-  });
-
-  const { data } = await ai.getJSON(prompts.nextAction({ contact, deal }), {
-    log: { userId: req.user.id, contactId: contact.id, dealId: dealId || null, input: { contactId: contact.id, dealId } },
-  });
-  res.json({ success: true, recommendation: data });
+  res.json({ success: true, ...(await recommendNextAction(contact.id, { userId: req.user.id, dealId })) });
 }
 
-/** POST /api/ai/enrich-contact { contactId } — Clearbit when configured, otherwise AI suggestions. */
-async function enrichContact(req, res) {
-  const contact = await findContact(req.user, req.body?.contactId, { include: { company: true } });
-
-  if (process.env.CLEARBIT_API_KEY && contact.email) {
-    try {
-      const r = await axios.get(
-        `https://person.clearbit.com/v2/combined/find?email=${encodeURIComponent(contact.email)}`,
-        { headers: { Authorization: `Bearer ${process.env.CLEARBIT_API_KEY}` }, timeout: 10_000 },
-      );
-      return res.json({ success: true, source: 'clearbit', enriched: {
-        title:       r.data.person?.employment?.title,
-        linkedinUrl: r.data.person?.linkedin?.handle ? `https://linkedin.com/in/${r.data.person.linkedin.handle}` : undefined,
-        companySize: r.data.company?.metrics?.employees,
-        industry:    r.data.company?.category?.industry,
-      } });
-    } catch (err) {
-      logger.warn({ event: 'clearbit_failed', err: err.message }, 'Clearbit lookup failed; using AI suggestions');
-    }
-  }
-
-  const { data } = await ai.getJSON(prompts.enrichSuggestions({ contact }), {
-    log: { userId: req.user.id, contactId: contact.id, input: { contactId: contact.id } },
+/** POST /api/ai/lead-score/:id/explain → { explanation }: one AI sentence, stored with the fresh score. */
+async function explainLeadScore(req, res) {
+  const contact = await findContact(req.user, req.params.id, { select: { id: true, firstName: true, lastName: true } });
+  const result = await scoring.leadScoreResult(contact.id);
+  const { text } = await ai.getText(prompts.leadExplain({ contact, result }), {
+    log: { userId: req.user.id, contactId: contact.id, input: { contactId: contact.id, score: result.score, label: result.label } },
   });
-  res.json({ success: true, source: 'ai-suggestion', enriched: data });
+  await prisma.contact.update({
+    where: { id: contact.id },
+    data: { leadScore: result.score, leadScoreLabel: result.label, leadScoreExplanation: text },
+  });
+  res.json({ success: true, explanation: text, score: result.score, label: result.label });
+}
+
+/** POST /api/ai/enrich-contact { contactId, domain? | linkedinUrl? } → a proposal; nothing is saved. */
+async function enrichContact(req, res) {
+  res.json({ success: true, ...(await enrichment.preview(req.user, req.body ?? {})) });
+}
+
+/** POST /api/ai/enrich-contact/:id/apply { fields, domain? } → { contact, company }. */
+async function applyEnrichment(req, res) {
+  res.json({ success: true, ...(await enrichment.apply(req.user, req.params.id, req.body ?? {}, req)) });
 }
 
 /** GET /api/ai/index/status (ADMIN) — index size per record type and the last full rebuild. */
@@ -157,4 +211,7 @@ async function rebuildIndex(_req, res) {
   res.status(202).json({ success: true, enqueued: ['reindex-all'] });
 }
 
-module.exports = { chat, composeEmail, dealSummary, smartReply, nextAction, enrichContact, indexStatus, rebuildIndex };
+module.exports = {
+  chat, composeEmail, dealSummary, contactNarrative, smartReply, nextAction, explainLeadScore,
+  enrichContact, applyEnrichment, indexStatus, rebuildIndex,
+};
