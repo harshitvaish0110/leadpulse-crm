@@ -1,14 +1,20 @@
-import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { formatCurrency, formatDate } from '../../lib/format';
 
 const monthLabel = (ds) => formatDate(ds, { dateOnly: true, day: undefined, year: '2-digit' });
 
+const SOURCE_NOTE = {
+  pending: 'The forecast is being computed and will appear shortly.',
+  unavailable: 'The forecast is unavailable right now.',
+};
+
 /**
- * Monthly actuals (solid area) plus the forecast (dashed line with a shaded
- * confidence band). The forecast service may return daily points; only those on
- * the first of a month are used so the series lines up with the monthly actuals.
+ * Monthly actuals (solid area), the forecast (dashed line with a shaded
+ * confidence band) and the weighted open pipeline by expected close month
+ * (bars). Only forecast points on the first of a month are used, so every
+ * series lines up with the monthly actuals.
  */
-export default function RevenueForecastChart({ historical = [], forecast = [], height = 240 }) {
+export default function RevenueForecastChart({ historical = [], forecast = [], pipeline = [], forecastSource, height = 240 }) {
   const actual = historical.map((m) => ({ ds: m.ds, actual: m.y }));
   const ahead = forecast
     .filter((f) => f.ds.endsWith('-01') && f.ds > (historical.at(-1)?.ds ?? ''))
@@ -20,11 +26,16 @@ export default function RevenueForecastChart({ historical = [], forecast = [], h
     const last = actual.at(-1);
     actual[actual.length - 1] = { ...last, forecast: last.actual, band: [last.actual, last.actual] };
   }
-  const data = [...actual, ...ahead];
+  const rows = new Map([...actual, ...ahead].map((r) => [r.ds, r]));
+  for (const p of pipeline) if (p.weighted > 0) rows.set(p.ds, { ...(rows.get(p.ds) ?? { ds: p.ds }), pipeline: p.weighted });
+  const data = [...rows.values()].sort((a, b) => a.ds.localeCompare(b.ds));
+  const hasPipeline = data.some((d) => d.pipeline);
+  const note = SOURCE_NOTE[forecastSource];
 
   if (!data.length) return <p className="text-sm text-gray-400 text-center py-16">No revenue in this period yet</p>;
 
   return (
+    <>
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data}>
         <defs>
@@ -43,10 +54,13 @@ export default function RevenueForecastChart({ historical = [], forecast = [], h
             : [formatCurrency(value), name])}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
+        {hasPipeline && <Bar dataKey="pipeline" name="Weighted pipeline" fill="#c7d2fe" radius={[4, 4, 0, 0]} barSize={18} />}
         <Area type="monotone" dataKey="actual" name="Revenue" stroke="#6366f1" strokeWidth={2.5} fill="url(#revenueGrad)" dot={false} connectNulls={false} />
         {ahead.length > 0 && <Area type="monotone" dataKey="band" name="Confidence range" stroke="none" fill="#a5b4fc" fillOpacity={0.25} />}
         {ahead.length > 0 && <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#6366f1" strokeDasharray="6 4" strokeWidth={2} dot={false} />}
       </ComposedChart>
     </ResponsiveContainer>
+    {note && <p className="text-xs text-gray-400 text-center mt-2" role="status">{note}</p>}
+    </>
   );
 }
