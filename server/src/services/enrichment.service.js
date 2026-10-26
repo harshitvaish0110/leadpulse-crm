@@ -14,6 +14,7 @@ const { prisma } = require('../lib/prisma');
 const { logger } = require('../lib/logger');
 const { audit } = require('../lib/audit');
 const { safeFetch } = require('../lib/safeFetch');
+const { secret } = require('../lib/secrets');
 const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor } = require('../middleware/auth.middleware');
 const ai = require('./ai');
@@ -76,10 +77,10 @@ async function publicMetaFor(domain) {
 
 /** Clearbit person/company data when a key is configured; null otherwise or on any failure. */
 async function clearbitFor(email) {
-  if (!process.env.CLEARBIT_API_KEY || !email) return null;
+  if (!secret('CLEARBIT_API_KEY') || !email) return null;
   try {
     const { data } = await axios.get(`https://person.clearbit.com/v2/combined/find?email=${encodeURIComponent(email)}`, {
-      headers: { Authorization: `Bearer ${process.env.CLEARBIT_API_KEY}` }, timeout: 10_000,
+      headers: { Authorization: `Bearer ${secret('CLEARBIT_API_KEY')}` }, timeout: 10_000,
     });
     return {
       title: data.person?.employment?.title, company: data.company?.name, employees: data.company?.metrics?.employees,

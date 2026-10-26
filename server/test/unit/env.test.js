@@ -4,7 +4,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { validateEnv } = require('../../src/lib/env');
 
-const VALID = { DATABASE_URL: 'postgresql://u:p@localhost:5432/db', JWT_SECRET: 'x'.repeat(32), GEMINI_API_KEY: 'k', REDIS_URL: 'redis://localhost:6379' };
+const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+const VALID = { DATABASE_URL: 'postgresql://u:p@localhost:5432/db', JWT_SECRET: 'x'.repeat(32), GEMINI_API_KEY: 'k', REDIS_URL: 'redis://localhost:6379', ENCRYPTION_KEY };
 
 test('valid configuration has no errors or warnings', () => {
   assert.deepEqual(validateEnv(VALID), { errors: [], warnings: [] });
@@ -22,9 +23,15 @@ test('JWT_SECRET shorter than 32 characters is an error', () => {
 });
 
 test('no AI key is a warning, suppressed in mock mode', () => {
-  const noKeys = { DATABASE_URL: VALID.DATABASE_URL, JWT_SECRET: VALID.JWT_SECRET, REDIS_URL: VALID.REDIS_URL };
+  const noKeys = { DATABASE_URL: VALID.DATABASE_URL, JWT_SECRET: VALID.JWT_SECRET, REDIS_URL: VALID.REDIS_URL, ENCRYPTION_KEY };
   assert.equal(validateEnv(noKeys).warnings.length, 1);
   assert.equal(validateEnv({ ...noKeys, AI_MOCK: 'true' }).warnings.length, 0);
+});
+
+test('ENCRYPTION_KEY: missing is a warning, the wrong length an error', () => {
+  const { ENCRYPTION_KEY: _, ...without } = VALID;
+  assert.match(validateEnv(without).warnings[0], /ENCRYPTION_KEY/);
+  assert.match(validateEnv({ ...VALID, ENCRYPTION_KEY: Buffer.alloc(16).toString('base64') }).errors[0], /32 bytes/);
 });
 
 test('production requires ML_SERVICE_TOKEN, an origin allow-list and INTERNAL_JOB_TOKEN', () => {

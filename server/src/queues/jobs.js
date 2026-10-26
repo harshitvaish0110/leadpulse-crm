@@ -43,7 +43,7 @@ if (require.main === module) {
     process.exit(2);
   }
   relayThroughRedis(); // live updates reach open browsers through the API
-  Promise.resolve()
+  Promise.all([require('../lib/secrets').loadSecrets(), require('../lib/workspace').refreshWorkspace()])
     .then(() => handlers[name](json ? JSON.parse(json) : {}))
     .then((result) => {
       logger.info({ event: 'job_completed', jobName: name, result }, 'Job completed');

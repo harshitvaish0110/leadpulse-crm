@@ -18,6 +18,15 @@ const { validateEnv } = require('./src/lib/env');
 const { relayThroughRedis } = require('./src/lib/realtime');
 const { startWorker } = require('./src/queues/worker');
 const { closeQueue }  = require('./src/queues/queue');
+const { loadSecrets } = require('./src/lib/secrets');
+const { refreshWorkspace } = require('./src/lib/workspace');
+
+/** Keys saved in Settings and the workspace row: loaded now, then every minute (other processes may change them). */
+async function loadSettings() {
+  const refresh = () => Promise.all([loadSecrets(), refreshWorkspace()]);
+  await refresh();
+  setInterval(refresh, 60_000).unref();
+}
 
 async function main() {
   const { errors } = validateEnv();
@@ -34,6 +43,7 @@ async function main() {
     process.exit(1);
   }
 
+  await loadSettings();
   relayThroughRedis();
   const worker = startWorker();
 

@@ -8,12 +8,14 @@
  * `msgs` are { role: 'system'|'user'|'assistant', content }. Errors carry the
  * HTTP `status` when there is one; the gateway decides about retries and fallback.
  * Model ids change as providers retire them, so each one comes from the environment.
+ * API keys come from secrets.js: the environment, else a key saved in Settings.
  */
 
 'use strict';
 
 const { GoogleGenAI } = require('@google/genai');
 const Anthropic = require('@anthropic-ai/sdk');
+const { secret, keyedClient } = require('../../lib/secrets');
 
 const systemText = (msgs) => msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n') || undefined;
 const chatTurns = (msgs) => msgs.filter((m) => m.role !== 'system');
@@ -30,8 +32,7 @@ function httpError(provider, status, body) {
 
 // ── Gemini (@google/genai) ─────────────────────────────────────────────────────
 function gemini() {
-  let client;
-  const sdk = () => (client ??= new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }));
+  const sdk = keyedClient('GEMINI_API_KEY', (apiKey) => new GoogleGenAI({ apiKey }));
   const model = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
   const request = (msgs, { maxTokens, temperature, json, signal }) => ({
@@ -52,7 +53,7 @@ function gemini() {
   return {
     name: 'gemini',
     model,
-    enabled: () => Boolean(process.env.GEMINI_API_KEY),
+    enabled: () => Boolean(secret('GEMINI_API_KEY')),
     async complete(msgs, opts) {
       const res = await sdk().models.generateContent(request(msgs, opts));
       return { text: res.text ?? '', tokens: tokens(res.usageMetadata) };
@@ -107,7 +108,7 @@ function openaiCompatible({ name, baseURL, keyEnv, modelEnv, defaultModel, jsonM
     const res = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
       signal,
-      headers: { Authorization: `Bearer ${process.env[keyEnv]}`, 'Content-Type': 'application/json', ...headers },
+      headers: { Authorization: `Bearer ${secret(keyEnv)}`, 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({
         model: model(),
         messages: msgs,
@@ -127,7 +128,7 @@ function openaiCompatible({ name, baseURL, keyEnv, modelEnv, defaultModel, jsonM
   return {
     name,
     model,
-    enabled: () => Boolean(process.env[keyEnv]),
+    enabled: () => Boolean(secret(keyEnv)),
     async complete(msgs, opts) {
       const data = await (await post(msgs, opts, false)).json();
       return { text: data.choices?.[0]?.message?.content ?? '', tokens: tokens(data.usage) };
@@ -148,9 +149,8 @@ function openaiCompatible({ name, baseURL, keyEnv, modelEnv, defaultModel, jsonM
 
 // ── Anthropic (@anthropic-ai/sdk) ──────────────────────────────────────────────
 function anthropic() {
-  let client;
   // The gateway owns retries, so the SDK's own are switched off.
-  const sdk = () => (client ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 }));
+  const sdk = keyedClient('ANTHROPIC_API_KEY', (apiKey) => new Anthropic({ apiKey, maxRetries: 0 }));
   const model = () => process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
   const body = (msgs, { maxTokens, temperature }) => ({
     model: model(), max_tokens: maxTokens, temperature, system: systemText(msgs), messages: chatTurns(msgs),
@@ -160,7 +160,7 @@ function anthropic() {
   return {
     name: 'anthropic',
     model,
-    enabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
+    enabled: () => Boolean(secret('ANTHROPIC_API_KEY')),
     async complete(msgs, opts) {
       const res = await sdk().messages.create(body(msgs, opts), { signal: opts.signal });
       return { text: res.content.filter((b) => b.type === 'text').map((b) => b.text).join(''), tokens: tokens(res.usage) };

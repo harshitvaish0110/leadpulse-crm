@@ -19,8 +19,17 @@ const { redis, closeRedis } = require('./src/lib/redis');
 const { validateEnv }  = require('./src/lib/env');
 const { attachSocket, closeSocket } = require('./src/lib/realtime');
 const { closeQueue }   = require('./src/queues/queue');
+const { loadSecrets }  = require('./src/lib/secrets');
+const { refreshWorkspace } = require('./src/lib/workspace');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
+
+/** Keys saved in Settings and the workspace row: loaded now, then every minute (other processes may change them). */
+async function loadSettings() {
+  const refresh = () => Promise.all([loadSecrets(), refreshWorkspace()]);
+  await refresh();
+  setInterval(refresh, 60_000).unref();
+}
 
 async function bootstrap() {
   // ── Fail fast on missing/weak configuration ─────────────────────────────────
@@ -39,6 +48,7 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  await loadSettings();
   redis(); // connect early, so the first requests can already queue jobs
 
   const app    = createApp();
