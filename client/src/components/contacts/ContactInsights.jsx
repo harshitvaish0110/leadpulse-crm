@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../api/axiosInstance';
 import Skeleton from '../ui/Skeleton';
+import StreamingMarkdownCard from '../ai/StreamingMarkdownCard';
 import { formatDate, formatPercent } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
 
@@ -39,11 +40,17 @@ function MetricChart({ contactId, metric, title, domain, color, step, format, da
   );
 }
 
-/** Score, churn and sentiment history for a contact. */
+/** Score, churn and sentiment history for a contact, plus an AI relationship summary. */
 export default function ContactInsights({ contactId, days = 90 }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {CHARTS.map((c) => <MetricChart key={c.metric} contactId={contactId} days={days} {...c} />)}
+      <StreamingMarkdownCard
+        title="Relationship summary"
+        subtitle="The story of this account, from its deals, activity and sentiment"
+        endpoint={`/api/ai/contact-narrative/${contactId}`}
+        actionLabel="Summarise the relationship"
+      />
     </div>
   );
 }
