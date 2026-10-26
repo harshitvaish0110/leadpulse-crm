@@ -31,6 +31,20 @@ function refreshCookie(res) {
   return raw ? raw.split(';')[0] : null;
 }
 
+/**
+ * Retries `read` until it returns something truthy (or `timeoutMs` passes).
+ * For records written fire-and-forget, such as AI call logs, which can land a
+ * few milliseconds after the response.
+ */
+async function eventually(read, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (value || Date.now() > deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 /** Removes refresh tokens created by this test file, then closes the pool and any Redis connection. */
 async function teardown() {
   await prisma.refreshToken.deleteMany({ where: { createdAt: { gte: startedAt } } });
@@ -39,4 +53,4 @@ async function teardown() {
   await closeRedis();
 }
 
-module.exports = { app, request, prisma, bearer, login, refreshCookie, teardown };
+module.exports = { app, request, prisma, bearer, login, refreshCookie, eventually, teardown };
