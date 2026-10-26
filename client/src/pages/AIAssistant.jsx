@@ -11,7 +11,7 @@ import ApprovalCard from '../components/ai/ApprovalCard';
 import ErrorBoundary from '../components/ErrorBoundary';
 import toast from 'react-hot-toast';
 
-const STARTERS = ['Which deals are at risk?', 'Summarise my pipeline', 'Who are my hottest leads?', 'What happened with Acme Corp last week?'];
+const STARTERS = ['Which deals over 50k close this month?', 'Summarise my pipeline', 'Who are my hottest leads?', 'Which tasks are overdue?'];
 const NO_MESSAGES = [];
 
 const fetchConversation = (id) => () => api.get(`/api/ai/conversations/${id}`).then((r) => r.data.conversation);
@@ -32,6 +32,7 @@ const SOURCE_PATH = {
   deal: (s) => `/deals/${s.id}`,
   company: (s) => `/companies/${s.id}`,
   activity: (s) => `/contacts/${s.contactId}?tab=activities`,
+  task: (s) => (s.contactId ? `/contacts/${s.contactId}?tab=tasks` : '/tasks'),
 };
 
 function SourceChip({ source }) {
@@ -144,6 +145,19 @@ export default function AIAssistant() {
     if (done.conversationId !== conversationId) setParams({ c: done.conversationId });
     setPending(null);
   };
+
+  // "Ask AI" from the command palette arrives as ?ask=…: start a new chat with it. Deferred, so a
+  // development double mount (which runs the abort-on-leave cleanup) can't cancel it; clearing the
+  // timer on cleanup keeps it to one question.
+  const ask = params.get('ask');
+  useEffect(() => {
+    if (!ask) return undefined;
+    const timer = setTimeout(() => {
+      setParams({}, { replace: true });
+      send(ask);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [ask]); // eslint-disable-line react-hooks/exhaustive-deps -- send reads the latest state; run once per question
 
   const retry = (question) => {
     setPending(null);

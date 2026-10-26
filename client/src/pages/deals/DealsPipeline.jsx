@@ -27,6 +27,7 @@ import { useUrlFilters } from '../../hooks/useUrlFilters';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 import { apiError } from '../../lib/apiError';
+import { useUrlFlag } from '../../hooks/useUrlFlag';
 
 const CLOSED = new Set(['CLOSED_WON', 'CLOSED_LOST']);
 const FILTER_DEFAULTS = { view: 'kanban', q: '', owner: '', min: '', max: '', from: '', to: '', sort: 'createdAt:desc', page: '1' };
@@ -343,6 +344,8 @@ export default function DealsPipeline() {
   const [filters, setFilters] = useUrlFilters(FILTER_DEFAULTS);
   const [search, setSearch] = useState(filters.q);
   const [addStage, setAddStage] = useState(null); // stage object or 'default'
+  const [newDeal, setNewDeal] = useUrlFlag('new'); // a link opened the form (command palette)
+  const closeAdd = () => { setAddStage(null); setNewDeal(false); };
   const list = filters.view === 'list';
   const hasFilters = ['q', 'owner', 'min', 'max', 'from', 'to'].some(k => filters[k]);
 
@@ -403,8 +406,10 @@ export default function DealsPipeline() {
         ? <DealListView filters={filters} setFilters={setFilters} />
         : <KanbanBoard filters={filters} onAddDeal={setAddStage} />}
 
-      <SlideOver isOpen={Boolean(addStage)} onClose={() => setAddStage(null)} title="Add New Deal">
-        {addStage && <AddDealForm key={addStage.id ?? 'default'} stage={addStage === 'default' ? null : addStage} onClose={() => setAddStage(null)} />}
+      <SlideOver isOpen={Boolean(addStage) || newDeal} onClose={closeAdd} title="Add New Deal">
+        {(addStage || newDeal) && (
+          <AddDealForm key={addStage?.id ?? 'default'} stage={addStage && addStage !== 'default' ? addStage : null} onClose={closeAdd} />
+        )}
       </SlideOver>
     </div>
   );

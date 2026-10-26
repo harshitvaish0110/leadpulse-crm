@@ -23,6 +23,7 @@ import { useUrlFilters } from '../../hooks/useUrlFilters';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 import { apiError } from '../../lib/apiError';
+import { useUrlFlag } from '../../hooks/useUrlFlag';
 
 const FILTER_DEFAULTS = { q: '', status: '', owner: '', tag: '', score: '', risk: '', sort: 'createdAt:desc', page: '1' };
 const PAGE_SIZE = 25;
@@ -178,7 +179,7 @@ export default function ContactsList() {
   const isPrivileged = useAuthStore((s) => ['ADMIN', 'MANAGER'].includes(s.user?.role));
   const [filters, setFilters] = useUrlFilters(FILTER_DEFAULTS);
   const [searchInput, setSearchInput] = useState(filters.q);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useUrlFlag('new');
   const [showImport, setShowImport] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const { data: directory = [] } = useDirectory();

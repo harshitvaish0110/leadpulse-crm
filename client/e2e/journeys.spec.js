@@ -83,6 +83,26 @@ test('tasks: quick-add from the floating button, then complete it', async ({ pag
     .tasks.some((t) => t.id === task.id)).toBe(true);
 });
 
+test('command palette: jump to a contact, then open "New task" from anywhere', async ({ page, request }) => {
+  const res = await request.post('/api/contacts', { ...auth(), data: { firstName: 'Palette', lastName: `Journey ${run}`, email: `palette+${run}@example.com` } });
+  const contact = (await res.json()).contact;
+  created.contacts.push(contact.id);
+
+  await page.keyboard.press('Control+k');
+  const input = page.getByRole('combobox', { name: 'Search or run a command' });
+  await input.fill(`palette ${run}`);
+  await expect(page.getByRole('option', { name: new RegExp(`Palette Journey ${run}`) }).first()).toBeVisible();
+  await expect(page.getByRole('option', { name: new RegExp(`Ask AI: .palette ${run}`) })).toBeVisible();
+  await input.press('Enter'); // the first match is highlighted
+  await expect(page).toHaveURL(new RegExp(`/contacts/${contact.id}$`));
+
+  await page.keyboard.press('Control+k');
+  await input.fill('new task');
+  await input.press('Enter');
+  await expect(page).toHaveURL(/\/tasks\?new=1$/);
+  await expect(page.getByLabel('Task title')).toBeVisible();
+});
+
 test('deals: the list view sorts by value from the column header', async ({ page }) => {
   await page.goto('/deals');
   await page.getByRole('button', { name: 'List' }).click();

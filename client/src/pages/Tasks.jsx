@@ -21,6 +21,7 @@ import { useUrlFilters } from '../hooks/useUrlFilters';
 import { useAuthStore } from '../store/authStore';
 import toast from 'react-hot-toast';
 import { apiError } from '../lib/apiError';
+import { useUrlFlag } from '../hooks/useUrlFlag';
 
 const PRIORITY_VARIANT = { HIGH: 'red', MEDIUM: 'amber', LOW: 'gray' };
 const PRIORITY_DOT = { HIGH: 'bg-red-500', MEDIUM: 'bg-amber-500', LOW: 'bg-gray-400' };
@@ -175,7 +176,7 @@ export default function Tasks() {
   const [filters, setFilters] = useUrlFilters(FILTER_DEFAULTS);
   const view = isPrivileged && filters.view === 'all' ? 'all' : 'mine';
   const calendar = filters.mode === 'calendar';
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useUrlFlag('new');
   const [showCompleted, setShowCompleted] = useState(false);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [day, setDay] = useState(null);

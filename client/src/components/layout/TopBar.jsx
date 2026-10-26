@@ -1,4 +1,4 @@
-import { Menu, ChevronDown, LogOut, User } from 'lucide-react';
+import { Menu, ChevronDown, LogOut, User, Search } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
@@ -6,10 +6,12 @@ import { logout } from '../../api/axiosInstance';
 import { useUIStore } from '../../store/uiStore';
 import Avatar from '../ui/Avatar';
 import NotificationBell from './NotificationBell';
+import { SHORTCUT_LABEL } from '../../lib/shortcut';
 
 export default function TopBar({ title }) {
   const user = useAuthStore((s) => s.user);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const openPalette = useUIStore((s) => s.setPaletteOpen);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -28,6 +30,12 @@ export default function TopBar({ title }) {
       </div>
 
       <div className="flex items-center gap-3">
+        <button type="button" onClick={() => openPalette(true)} aria-label={`Search or ask (${SHORTCUT_LABEL})`}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-400 hover:border-gray-300 hover:text-gray-600 transition-colors">
+          <Search size={15} />
+          <span className="hidden md:inline">Search or ask…</span>
+          <kbd className="hidden md:inline font-sans text-[11px] text-gray-400 border border-gray-200 rounded px-1">{SHORTCUT_LABEL}</kbd>
+        </button>
         <NotificationBell />
 
         {/* User menu */}
