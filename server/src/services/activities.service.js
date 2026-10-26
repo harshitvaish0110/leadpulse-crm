@@ -12,6 +12,9 @@ const { ApiError } = require('../middleware/error.middleware');
 const { scopeFor, assertInScope, assertContactInScope } = require('../middleware/auth.middleware');
 const { ml } = require('../lib/mlClient');
 const { emitScoped } = require('../lib/realtime');
+const { logger } = require('../lib/logger');
+const storage = require('../lib/storage');
+const { queueTranscription } = require('./transcription.service');
 const { afterActivityChange, reindex, SENTIMENT_TYPES } = require('../queues/triggers');
 const { removeFromIndex } = require('./semanticIndex.service');
 const { snapshot, MIN_CHANGE } = require('./scoring.service');
@@ -70,30 +73,57 @@ async function logActivity(user, input) {
   return activity;
 }
 
-/** Creates the TRANSCRIPT activity for an analysed call recording. */
-async function logCallRecording(user, { contactId, dealId, extraction }) {
-  const contact = await assertParents(user, contactId, dealId);
-  const sentiment = SENTIMENT_LABELS.has(extraction.sentiment) ? extraction.sentiment : null;
+const AUDIO_EXTENSIONS = {
+  'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/mp4': '.m4a',
+  'audio/x-m4a': '.m4a', 'audio/m4a': '.m4a', 'audio/webm': '.webm', 'audio/ogg': '.ogg', 'audio/flac': '.flac',
+};
 
+/**
+ * Stores a call recording privately and creates its TRANSCRIPT activity in
+ * `processing` state; transcription follows as a background job.
+ * @param {{ buffer: Buffer, mimetype: string }} file
+ */
+async function logRecording(user, { contactId, dealId, occurredAt, file }) {
+  const contact = await assertParents(user, contactId, dealId);
+  const when = occurredAt ? new Date(occurredAt) : new Date();
+  if (Number.isNaN(when.getTime())) throw ApiError.validation([{ path: 'occurredAt', msg: 'occurredAt must be a date' }]);
+
+  const key = storage.newKey('audio', `call${AUDIO_EXTENSIONS[file.mimetype.split(';')[0]] ?? '.webm'}`);
+  await storage.put(key, file.buffer);
   const activity = await prisma.activity.create({
     data: {
-      type:       'TRANSCRIPT',
-      subject:    'Call Recording',
-      notes:      extraction.summary || null,
-      transcript: extraction.transcript || null,
-      sentiment,
-      metadata:   extraction,
-      contactId,
-      dealId:     dealId || null,
-      userId:     user.id,
-      occurredAt: new Date(),
+      type: 'TRANSCRIPT', subject: 'Call recording', audioKey: key, metadata: { status: 'processing' },
+      contactId, dealId: dealId || null, userId: user.id, occurredAt: when,
     },
     include: ACTIVITY_INCLUDE,
   });
 
   emitCreated(activity, contact.ownerId);
   afterActivityChange(activity, { created: true });
+  await queueTranscription(activity.id);
   return activity;
+}
+
+/** POST /activities/:id/retry-transcription — only for a recording whose transcription failed. */
+async function retryTranscription(user, activityId) {
+  const activity = await prisma.activity.findFirst({ where: { id: activityId, ...scopeFor(user, 'activity') }, select: { id: true, audioKey: true, metadata: true } });
+  if (!activity?.audioKey) throw ApiError.notFound('Recording not found');
+  if (activity.metadata?.status !== 'failed') throw ApiError.conflict('Only a failed transcription can be retried', 'NOT_FAILED');
+  const updated = await prisma.activity.update({
+    where: { id: activityId },
+    data: { metadata: { status: 'processing' } },
+    include: ACTIVITY_INCLUDE,
+  });
+  await queueTranscription(activityId);
+  return updated;
+}
+
+/** A 10-minute link to play the recording. */
+async function recordingUrl(user, activityId) {
+  const activity = await prisma.activity.findFirst({ where: { id: activityId, ...scopeFor(user, 'activity') }, select: { audioKey: true, occurredAt: true } });
+  if (!activity?.audioKey) throw ApiError.notFound('Recording not found');
+  const ext = activity.audioKey.slice(activity.audioKey.lastIndexOf('.'));
+  return storage.signedUrl(activity.audioKey, `call-${activity.occurredAt.toISOString().slice(0, 10)}${ext}`);
 }
 
 /**
@@ -157,14 +187,15 @@ async function backfillSentiment(now = new Date(), limit = 200) {
 async function deleteActivity(user, activityId) {
   const activity = await prisma.activity.delete({
     where:  { id: activityId, ...scopeFor(user, 'activity') },
-    select: { id: true, userId: true, contactId: true, dealId: true, contact: { select: { ownerId: true } } },
+    select: { id: true, userId: true, contactId: true, dealId: true, audioKey: true, contact: { select: { ownerId: true } } },
   });
   await removeFromIndex({ activity: [activity.id] });
+  if (activity.audioKey) await storage.remove(activity.audioKey).catch((err) => logger.warn({ event: 'audio_remove_failed', err: err.message }, 'Recording not deleted'));
   emitScoped([activity.userId, activity.contact.ownerId], 'activity:deleted', { activityId: activity.id, contactId: activity.contactId });
   afterActivityChange(activity, { deleted: true });
 }
 
 module.exports = {
   ACTIVITY_TYPES, ACTIVITY_INCLUDE,
-  assertParents, logActivity, logCallRecording, scoreSentiment, backfillSentiment, deleteActivity,
+  assertParents, logActivity, logRecording, retryTranscription, recordingUrl, scoreSentiment, backfillSentiment, deleteActivity,
 };

@@ -76,6 +76,7 @@ function runInline(name, data, { dedupe, delay = 0 }) {
  * @param {string} [opts.jobId]    exact id; a second job with the same id is ignored
  * @param {number} [opts.delay]    ms before the job may run (debounce window)
  * @param {number} [opts.attempts]
+ * @param {object} [opts.backoff]   e.g. { type: 'exponential', delay: 30000 }
  * @param {object} [opts.removeOnComplete]
  */
 async function enqueue(name, data = {}, opts = {}) {
@@ -92,6 +93,7 @@ async function enqueue(name, data = {}, opts = {}) {
       jobId: opts.jobId,
       delay: opts.delay,
       attempts: opts.attempts,
+      backoff: opts.backoff,
       removeOnComplete: opts.removeOnComplete,
       deduplication: opts.dedupe && { id: opts.dedupe, keepLastIfActive: true },
     }).filter(([, v]) => v !== undefined));
