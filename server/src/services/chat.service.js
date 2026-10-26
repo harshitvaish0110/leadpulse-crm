@@ -5,8 +5,10 @@
  * found by hybrid search (scoped exactly like the rest of the API), and streamed
  * as SSE: `delta`… `sources` [`actions`] `done`. With no matching record the
  * fixed "I don't have that information" answer is sent without an LLM call.
- * Questions about the pipeline as a whole (hottest leads, risk, closing deals)
- * also get a live snapshot of the caller's book, which search alone can't rank. When
+ * Questions that filter, rank or count ("deals over 100k closing this month")
+ * are also turned into checked, scoped database queries (crmQueries), whose
+ * complete results come first. Questions about the pipeline as a whole (hottest
+ * leads, risk, closing deals) also get a live snapshot of the caller's book. When
  * the user asked for something to be done, the proposed actions are stored as
  * PENDING for them to approve; nothing is executed here.
  */
@@ -22,6 +24,7 @@ const ai = require('./ai');
 const prompts = require('./ai/prompts');
 const semanticIndex = require('./semanticIndex.service');
 const actions = require('./actions.service');
+const crmQueries = require('./crmQueries.service');
 const { localDate, orgTimezone } = require('./nightly.service');
 const { money } = require('../lib/workspace');
 
@@ -32,6 +35,11 @@ const WANTS_ACTION = /\b(create|add|log|schedule|remind|move|mark|draft|write|se
 // Questions about the book as a whole, which ranking by text similarity can't answer.
 const AGGREGATE = /\b(hot|hottest|top|best|biggest|largest|pipeline|risk|risky|churn|closing|forecast|how many|summar\w*|overview|priorit\w*|stuck|stale)\b/i;
 const OPEN_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION'];
+
+// Planning queries costs an LLM call, so it only happens when the question names records and a filter, ranking or count.
+const RECORDS = /\b(deals?|opportunit\w*|pipeline|contacts?|leads?|customers?|accounts?|people|tasks?|to-?dos?)\b/i;
+const FILTERS = /\b(over|under|above|below|more than|less than|at least|between|\d+\s*k\b|\$?\d{3,}|clos\w*|won|lost|due|overdue|today|tomorrow|this (week|month|quarter|year)|next (week|month|quarter)|last (week|month|quarter|year)|q[1-4]|stalled|stuck|no (contact|activity)|haven'?t|inactive|churn\w*|hot|warm|cold|stage|status|owned|which|list|show|top|biggest|largest|highest|lowest|most|least|how many|how much|total|count|sum|average)\b/i;
+const wantsQueries = (question) => RECORDS.test(question) && FILTERS.test(question);
 
 const fullName = (p) => `${p.firstName} ${p.lastName}`;
 const pct = (p) => `${Math.round((p ?? 0) * 100)}%`;
@@ -69,10 +77,25 @@ async function pipelineSnapshot(user, today) {
   return { record: { recordType: 'snapshot', recordId: 'pipeline', content }, refs };
 }
 
+/**
+ * The records an answer cites as [n] (also 【n】), in citation order; null when it cites none
+ * that exist. Citing a query result ("8 tasks are overdue [1]") also brings the rows listed under it.
+ */
+function citedRecords(answer, chunks) {
+  const numbers = [...String(answer).matchAll(/[[【](\d{1,2})[\]】]/g)].map((m) => Number(m[1]) - 1);
+  const picked = [];
+  for (const i of new Set(numbers)) {
+    if (i < 0 || i >= chunks.length) continue;
+    picked.push(chunks[i]);
+    if (chunks[i].recordType === 'query') for (let j = i + 1; chunks[j]?.fromQuery; j += 1) picked.push(chunks[j]);
+  }
+  return picked.length ? picked : null;
+}
+
 /** Chip data for each retrieved record: what it is, its name and where it links to. */
 async function resolveSources(chunks) {
   const ids = (type) => chunks.filter((c) => c.recordType === type).map((c) => c.recordId);
-  const [contacts, deals, companies, activities] = await Promise.all([
+  const [contacts, deals, companies, activities, tasks] = await Promise.all([
     prisma.contact.findMany({ where: { id: { in: ids('contact') } }, select: { id: true, firstName: true, lastName: true } }),
     prisma.deal.findMany({ where: { id: { in: ids('deal') } }, select: { id: true, title: true, contactId: true } }),
     prisma.company.findMany({ where: { id: { in: ids('company') } }, select: { id: true, name: true } }),
@@ -80,6 +103,7 @@ async function resolveSources(chunks) {
       where: { id: { in: ids('activity') } },
       select: { id: true, type: true, subject: true, occurredAt: true, contactId: true, contact: { select: { firstName: true, lastName: true } } },
     }),
+    prisma.task.findMany({ where: { id: { in: ids('task') } }, select: { id: true, title: true, contactId: true } }),
   ]);
   const byKey = new Map([
     ...contacts.map((c) => [`contact:${c.id}`, { type: 'contact', id: c.id, name: fullName(c), contactId: c.id }]),
@@ -89,6 +113,7 @@ async function resolveSources(chunks) {
       type: 'activity', id: a.id, contactId: a.contactId,
       name: `${a.subject || a.type.toLowerCase()} · ${fullName(a.contact)} · ${a.occurredAt.toISOString().slice(0, 10)}`,
     }]),
+    ...tasks.map((t) => [`task:${t.id}`, { type: 'task', id: t.id, name: t.title, contactId: t.contactId }]),
   ]);
   return chunks.map((c) => byKey.get(`${c.recordType}:${c.recordId}`)).filter(Boolean);
 }
@@ -97,11 +122,28 @@ async function resolveSources(chunks) {
  * "2026-10-26 (Monday). Coming days: Tue 2026-10-27, …, Mon 2026-11-02". Models are
  * unreliable at weekday arithmetic, so "next Monday" is resolved from this list.
  */
-async function calendarNote(now = new Date()) {
-  const tz = await orgTimezone();
+async function calendarNote(now = new Date(), tz = null) {
+  tz ??= await orgTimezone();
   const weekday = (d, style) => new Intl.DateTimeFormat('en-US', { weekday: style, timeZone: tz }).format(d);
   const days = Array.from({ length: 7 }, (_, i) => new Date(now.getTime() + (i + 1) * 86_400_000));
   return `${localDate(now, tz)} (${weekday(now, 'long')}). Coming days: ${days.map((d) => `${weekday(d, 'short')} ${localDate(d, tz)}`).join(', ')}`;
+}
+
+/**
+ * Asks the model which queries answer the question, then runs the checked ones.
+ * A failed plan only means no query results: the answer still uses search.
+ */
+async function runPlannedQueries(user, { question, history, today, tz, signal, log }) {
+  let plan;
+  try {
+    ({ data: plan } = await ai.getJSON(prompts.planQueries({ question, history, today }), { signal, log }));
+  } catch (err) {
+    if (!signal.aborted) logger.warn({ event: 'plan_queries_failed', err: err.message }, 'No structured queries for this question');
+    return [];
+  }
+  const queries = crmQueries.checkPlan(plan);
+  if (queries.length) logger.info({ event: 'chat_queries', tools: queries.map((q) => q.tool) }, 'Running structured queries');
+  return crmQueries.runQueries(user, queries, { tz });
 }
 
 /** Streams the answer to one question; validation and conversation lookup happen before the stream starts. */
@@ -115,7 +157,8 @@ async function ask(user, { conversationId, question }, res) {
     where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' }, take: HISTORY_TURNS, select: { role: true, content: true },
   })).reverse();
   await prisma.aiMessage.create({ data: { conversationId: conversation.id, role: 'user', content: question } });
-  const today = await calendarNote();
+  const tz = await orgTimezone();
+  const today = await calendarNote(new Date(), tz);
   const log = { userId: user.id, input: { conversationId: conversation.id, question } };
 
   const signal = clientGone(res);
@@ -124,10 +167,14 @@ async function ask(user, { conversationId, question }, res) {
     let chunks;
     let snapshotRefs = [];
     try {
-      chunks = await semanticIndex.search(user, question, { limit: 6 });
+      const [hits, queried] = await Promise.all([
+        semanticIndex.search(user, question, { limit: 6 }),
+        wantsQueries(question) ? runPlannedQueries(user, { question, history, today, tz, signal, log }) : [],
+      ]);
+      chunks = [...queried, ...hits];
       if (AGGREGATE.test(question)) {
         const snapshot = await pipelineSnapshot(user, today);
-        chunks = [snapshot.record, ...chunks];
+        chunks = [...queried, snapshot.record, ...hits];
         snapshotRefs = snapshot.refs;
       }
     } catch (err) {
@@ -154,9 +201,12 @@ async function ask(user, { conversationId, question }, res) {
     }
 
     const answered = !answer.trim().startsWith(prompts.NO_ANSWER.slice(0, 30));
-    const refs = await resolveSources([...chunks, ...snapshotRefs]);
+    // Chips for the records the answer cites; every record when it cites none (or the model numbered them oddly).
+    const cited = citedRecords(answer, chunks);
+    const usedSnapshot = !cited || cited.some((c) => c.recordType === 'snapshot');
+    const refs = await resolveSources([...(cited ?? chunks), ...(usedSnapshot ? snapshotRefs : [])]);
     const seen = new Set();
-    const sources = answered ? refs.filter((r) => !seen.has(`${r.type}:${r.id}`) && seen.add(`${r.type}:${r.id}`)).slice(0, 10) : [];
+    const sources = answered ? refs.filter((r) => !seen.has(`${r.type}:${r.id}`) && seen.add(`${r.type}:${r.id}`)).slice(0, 12) : [];
     sseSend(res, 'sources', { sources });
     const message = await prisma.aiMessage.create({
       data: { conversationId: conversation.id, role: 'assistant', content: answer, sources, provider },
@@ -210,4 +260,4 @@ async function deleteConversation(user, id) {
   if (!count) throw ApiError.notFound('Conversation not found');
 }
 
-module.exports = { ask, listConversations, getConversation, deleteConversation, resolveSources, calendarNote };
+module.exports = { ask, listConversations, getConversation, deleteConversation, resolveSources, calendarNote, wantsQueries, citedRecords };

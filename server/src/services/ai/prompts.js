@@ -301,6 +301,8 @@ function chatAnswer({ question, chunks, history = [], userName, today }) {
         role: 'system',
         content: `You are LeadPulse, the CRM assistant of ${userName}. Today is ${today}. `
           + 'Answer only from the numbered records inside <crm_data>; cite each fact as [n]. '
+          + 'A record that starts with "Query result" comes straight from the database and is complete: use it for counts, totals and '
+          + 'lists, say how many matched, and cite the records listed after it for the individual matches. '
           + `If the records do not contain the answer, reply exactly: "${NO_ANSWER}" `
           + 'You never change data yourself: when asked to do something (create a task, log an activity, move a deal, draft an email), '
           + 'give the relevant facts and say the action is suggested below for them to approve. '
@@ -312,7 +314,51 @@ function chatAnswer({ question, chunks, history = [], userName, today }) {
     ],
     maxTokens: 700,
     temperature: 0.3,
-    mock: 'Here is what your CRM shows [1].',
+    // Cites every record, so tests see everything that was retrieved (sources follow citations).
+    mock: `Here is what your CRM shows ${chunks.map((_, i) => `[${i + 1}]`).join('')}.`,
+  };
+}
+
+// ── Structured queries the assistant may run (JSON plan; checked in crmQueries) ─
+
+/**
+ * Turns a question into at most two database queries. The plan is only a
+ * suggestion: crmQueries.checkPlan validates it and every query is scoped.
+ */
+function planQueries({ question, history = [], today }) {
+  const earlier = history.filter((m) => m.role === 'user').slice(-2).map((m) => `- ${clip(m.content, 300)}`).join('\n');
+  const over = /\b(?:over|above|more than|at least)\s+\$?(\d+(?:\.\d+)?)\s*(k|m)?\b/i.exec(question);
+  return {
+    feature: 'plan_queries',
+    messages: messages(
+      'You translate a CRM user\'s question into database queries. Use a query only when the question filters, lists, ranks, counts or totals '
+      + 'deals, contacts or tasks. For anything else (a single named record, advice, writing) return {"queries": []}. Use at most 2 queries. '
+      + 'Resolve relative dates ("this month", "next week", "Q4") to YYYY-MM-DD from the calendar given. Money is in plain numbers (100k = 100000).',
+      `Calendar: ${today}.
+${earlier ? `Earlier questions in this conversation:\n${earlier}\n` : ''}<question>
+${clip(question, 1000)}
+</question>
+Tools and their optional parameters:
+- deals: status open|won|lost|any (default open), stages [LEAD|CONTACTED|DEMO|PROPOSAL|NEGOTIATION|CLOSED_WON|CLOSED_LOST], minValue, maxValue,
+  closeFrom, closeTo (expected close date for open deals, close date for won/lost), minWinProbability, maxWinProbability (0-1),
+  stalledDays (no stage change for N days), owner (a person's name), sort value|closeDate|winProbability|stalled, limit (max 10)
+- contacts: statuses [LEAD|ACTIVE|INACTIVE|CHURNED], scoreLabels [HOT|WARM|COLD], minLeadScore (0-120), minChurnRisk (0-1), maxSentiment (0-1),
+  noContactDays (no activity for N days), tag, owner, sort leadScore|churnRisk|sentiment|newest, limit (max 10)
+- tasks: due overdue|today|week|any, priorities [LOW|MEDIUM|HIGH], mine (true = assigned to the user), owner, limit (max 10)
+- pipeline_summary: groupBy stage|owner|month, status open|won|lost, closeFrom, closeTo, owner — counts and totals, no rows
+Return JSON only: {"queries": [{"tool": "deals", "minValue": 100000, "closeFrom": "2026-10-01", "closeTo": "2026-10-31", "sort": "value"}]}`,
+    ),
+    maxTokens: 500,
+    temperature: 0,
+    json: true,
+    schema: '{"queries": [{"tool": string, ...parameters}]}',
+    normalise: (o) => ({ queries: Array.isArray(o.queries) ? o.queries.filter((q) => q && typeof q === 'object').slice(0, 2) : [] }),
+    // The mock understands one pattern, "deals over N", so tests can exercise the whole path.
+    mock: {
+      queries: over && /\bdeals?\b/i.test(question)
+        ? [{ tool: 'deals', minValue: Number(over[1]) * ({ k: 1e3, m: 1e6 }[over[2]?.toLowerCase()] ?? 1), sort: 'value' }]
+        : [],
+    },
   };
 }
 
@@ -388,6 +434,6 @@ Return JSON only: {"summary": "3 sentences", "actionItems": ["..."], "sentiment"
 
 module.exports = {
   SAFETY, NO_ANSWER, crm, EMAIL_TONES, REPLY_TONES, ACTION_TYPES, ACTION_KINDS, DEAL_SECTIONS, BUDGET_TIERS,
-  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, leadExplain, enrich, chatAnswer, proposeActions, transcriptExtract,
+  composeEmail, dealSummary, contactNarrative, smartReply, nextAction, leadExplain, enrich, chatAnswer, planQueries, proposeActions, transcriptExtract,
   cleanReply, cleanExplanation,
 };
