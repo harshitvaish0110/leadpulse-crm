@@ -33,6 +33,15 @@ export const qk = {
     all: ['emails'],
     thread: (contactId) => ['emails', 'thread', contactId],
   },
+  ai: {
+    all: ['ai'],
+    conversations: ['ai', 'conversations'],
+    conversation: (id) => ['ai', 'conversation', id],
+    actions: (params) => ['ai', 'actions', params],
+  },
+  audit: {
+    list: (params) => ['audit', params],
+  },
   analytics: {
     all: ['analytics'],
     report: (name, params) => ['analytics', name, params],

@@ -17,6 +17,7 @@ export function renderMarkdown(markdown) {
     .replace(/^### (.+)$/gm, '<h4 class="text-xs font-semibold mt-2 mb-0.5">$1</h4>')
     .replace(/^## (.+)$/gm, '<h3 class="text-sm font-semibold mt-3 mb-1">$1</h3>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[(\d{1,2})\]/g, '<sup class="text-[10px] font-semibold text-indigo-500 px-0.5" title="Source $1">[$1]</sup>')
     .replace(/^[-*] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
     .replace(/\n{2,}/g, '<div class="mb-2"></div>')
     .replace(/\n/g, '<br/>');
