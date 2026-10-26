@@ -16,6 +16,7 @@ import AcceptInvite from './pages/auth/AcceptInvite';
 
 // App pages load on first visit (charts and drag-and-drop stay out of the login bundle).
 const Dashboard            = lazy(() => import('./pages/Dashboard'));
+const MyDay                = lazy(() => import('./pages/MyDay'));
 const ContactsList         = lazy(() => import('./pages/contacts/ContactsList'));
 const ContactDetail        = lazy(() => import('./pages/contacts/ContactDetail'));
 const CompaniesList        = lazy(() => import('./pages/companies/CompaniesList'));
@@ -61,6 +62,12 @@ function PageFallback() {
   );
 }
 
+/** "/" — sales reps start on My Day, managers and admins on the team dashboard. */
+function Home() {
+  const role = useAuthStore((s) => s.user?.role);
+  return <Navigate to={role === 'SALES_REP' ? '/my-day' : '/dashboard'} replace />;
+}
+
 export default function App() {
   useAuthBootstrap();
   return (
@@ -73,6 +80,8 @@ export default function App() {
 
           <Route element={<PrivateRoute />}>
             <Route element={<AppShell fallback={<PageFallback />} />}>
+              <Route path="/"                  element={<Home />} />
+              <Route path="/my-day"            element={<MyDay />} />
               <Route path="/dashboard"         element={<Dashboard />} />
               <Route path="/contacts"          element={<ContactsList />} />
               <Route path="/contacts/:id"      element={<ContactDetail />} />
@@ -100,7 +109,7 @@ export default function App() {
             </Route>
           </Route>
 
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
       <Toaster position="top-right" />

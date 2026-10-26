@@ -1,13 +1,14 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Building2, TrendingUp,
-  Activity, CheckSquare, BarChart2, Sparkles, Settings
+  Activity, CheckSquare, BarChart2, Sparkles, Settings, Sun
 } from 'lucide-react';
 import { useUIStore } from '../../store/uiStore';
 import { useAuthStore } from '../../store/authStore';
 import { useWorkspace } from '../../hooks/queries/lookups';
 
 const NAV_ITEMS = [
+  { label: 'My Day',        href: '/my-day',           icon: Sun },
   { label: 'Dashboard',     href: '/dashboard',        icon: LayoutDashboard },
   { label: 'Contacts',      href: '/contacts',         icon: Users },
   { label: 'Companies',     href: '/companies',        icon: Building2 },

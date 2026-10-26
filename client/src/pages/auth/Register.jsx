@@ -25,7 +25,7 @@ export default function Register() {
       const { data } = await authApi.post('/api/auth/register', { firstName, lastName, email, password });
       setSession(data.accessToken, data.user);
       toast.success(`Welcome to LeadPulse, ${data.user.firstName}!`);
-      navigate('/dashboard', { replace: true });
+      navigate('/', { replace: true });
     } catch (err) {
       const res = err.response?.data;
       toast.error(res?.details?.[0]?.msg || res?.error || 'Registration failed');

@@ -44,6 +44,7 @@ test('every page renders cleanly for a manager', async ({ page, request }) => {
   await signIn(page, 'raj@leadpulse.dev');
 
   const pages = [
+    ['/my-day', "Today's briefing"],
     ['/dashboard', 'Revenue'],
     ['/contacts', 'All Contacts'],
     ['/contacts?status=ACTIVE&score=HOT&sort=churnRisk:desc', 'All Contacts'],

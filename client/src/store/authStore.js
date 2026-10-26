@@ -21,5 +21,5 @@ export const getAccessToken = () => useAuthStore.getState().accessToken;
 
 /** Only same-app paths are allowed as a post-login destination (no open redirects). */
 export function safeNext(value) {
-  return value && value.startsWith('/') && !value.startsWith('//') ? value : '/dashboard';
+  return value && value.startsWith('/') && !value.startsWith('//') ? value : '/';
 }

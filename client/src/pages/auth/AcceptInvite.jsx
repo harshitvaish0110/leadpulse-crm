@@ -35,7 +35,7 @@ export default function AcceptInvite() {
       const { data } = await authApi.post('/api/auth/accept-invite', { token, firstName, lastName, password });
       setSession(data.accessToken, data.user);
       toast.success(`Welcome to LeadPulse, ${data.user.firstName}!`);
-      navigate('/dashboard', { replace: true });
+      navigate('/', { replace: true });
     } catch (err) {
       const res = err.response?.data;
       toast.error(res?.details?.[0]?.msg || res?.error || 'Could not accept the invitation');

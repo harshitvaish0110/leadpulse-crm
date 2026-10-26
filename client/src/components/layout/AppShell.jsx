@@ -8,6 +8,7 @@ import { useWorkspace } from '../../hooks/queries/lookups';
 import { setCurrency } from '../../lib/format';
 
 const PAGE_TITLES = {
+  '/my-day':                'My Day',
   '/dashboard':             'Dashboard',
   '/contacts':              'Contacts',
   '/companies':             'Companies',

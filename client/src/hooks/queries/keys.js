@@ -50,6 +50,8 @@ export const qk = {
     all: ['users'],
     directory: ['users', 'directory'],
   },
+  search: (q) => ['search', q],
+  myDay: ['my-day'],
   settings: {
     all: ['settings'],
     workspace: ['settings', 'workspace'],

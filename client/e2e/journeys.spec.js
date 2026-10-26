@@ -28,7 +28,7 @@ test.beforeEach(async ({ page }) => {
   await page.getByLabel('Email address').fill('sarah@leadpulse.dev');
   await page.getByLabel('Password').fill('password123');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/my-day$/); // sales reps start on My Day
 });
 
 test('contacts: filter from the URL, then tag and delete in bulk', async ({ page, request }) => {
