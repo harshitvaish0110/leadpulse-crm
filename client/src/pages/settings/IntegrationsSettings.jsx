@@ -13,7 +13,7 @@ import { timeAgo } from '../../lib/format';
 
 /** Display details for each integration the server knows (ids match integrations.service.js). */
 const KEY_CARDS = {
-  gemini:     { name: 'Google Gemini', placeholder: 'AIza…', docsUrl: 'https://aistudio.google.com/apikey', description: 'First choice for AI features: assistant, summaries, emails and next best actions.' },
+  gemini:     { name: 'Google Gemini', placeholder: 'AIza…', docsUrl: 'https://aistudio.google.com/apikey', description: 'First choice for AI features. When the Flash free quota is spent, Flash-Lite (its own quota) takes over.' },
   groq:       { name: 'Groq', placeholder: 'gsk_…', docsUrl: 'https://console.groq.com/keys', description: 'Fallback for AI features, and call transcription (Whisper).' },
   openrouter: { name: 'OpenRouter', placeholder: 'sk-or-…', docsUrl: 'https://openrouter.ai/keys', description: 'Second fallback, using free community models.' },
   anthropic:  { name: 'Anthropic', placeholder: 'sk-ant-…', docsUrl: 'https://console.anthropic.com/settings/keys', description: 'Optional; joins the fallback chain when a key is set.' },
@@ -22,6 +22,8 @@ const KEY_CARDS = {
   resend:     { name: 'Resend', placeholder: 're_…', docsUrl: 'https://resend.com/api-keys', description: 'Sends invitations and emails over HTTPS (works where SMTP is blocked).' },
 };
 const GROUPS = [['AI providers', ['gemini', 'groq', 'openrouter', 'anthropic', 'openai']], ['Enrichment', ['clearbit']]];
+const PROVIDER_NAMES = { 'gemini-lite': 'Gemini Flash-Lite', ...Object.fromEntries(Object.entries(KEY_CARDS).map(([id, c]) => [id, c.name])) };
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 function SourceBadge({ item }) {
   if (item.source === 'env') return <Badge variant="green">From .env</Badge>;
@@ -74,10 +76,22 @@ function KeyCard({ item, encryption }) {
           <p className="text-xs text-gray-500 mt-0.5">{card.description}</p>
         </div>
         <div className="flex items-center gap-1.5">
-          {item.circuit === 'open' && <Badge variant="red">Paused after errors</Badge>}
           <SourceBadge item={item} />
         </div>
       </div>
+      {item.source && item.models?.length > 0 && (
+        <p className="text-xs text-gray-500 mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          {item.models.map((m, i) => (
+            <span key={m.provider} className="inline-flex items-center gap-1.5">
+              {i > 0 && <span aria-hidden="true">→</span>}
+              <span className="font-mono">{m.model}</span>
+              {m.state === 'open' && (
+                <Badge variant="amber">paused{m.reopensAt ? ` until ${clock(m.reopensAt)}` : ''}</Badge>
+              )}
+            </span>
+          ))}
+        </p>
+      )}
       {item.last4 && (
         <p className="text-xs text-gray-500 mt-2">
           Current key <span className="font-mono">••••{item.last4}</span>
@@ -144,7 +158,7 @@ function UsageTable({ usage }) {
         <tbody className="divide-y divide-gray-100">
           {usage.map((u) => (
             <tr key={u.provider}>
-              <td className="py-2 pr-4 font-medium text-gray-900">{KEY_CARDS[u.provider]?.name ?? u.provider}</td>
+              <td className="py-2 pr-4 font-medium text-gray-900">{PROVIDER_NAMES[u.provider] ?? u.provider}</td>
               <td className="py-2 pr-4 tabular-nums">{u.calls}</td>
               <td className={`py-2 pr-4 tabular-nums ${u.errors ? 'text-red-600' : ''}`}>{u.errors}</td>
               <td className="py-2 pr-4 tabular-nums">{u.fallbacks}</td>

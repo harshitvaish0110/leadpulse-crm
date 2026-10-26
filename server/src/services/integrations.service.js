@@ -69,7 +69,7 @@ async function integrationStatus() {
     aiUsage(),
   ]);
   const savedAt = new Map(saved.map((r) => [r.provider, r.updatedAt]));
-  const circuits = ai.providerStates();
+  const providers = ai.providerDetails();
   return {
     encryption: encryptionReady(),
     keys: Object.entries(KEYS).map(([id, { envVar }]) => ({
@@ -78,7 +78,10 @@ async function integrationStatus() {
       source: secretSource(envVar),          // 'env' | 'ui' | null; the environment wins over a saved key
       savedAt: savedAt.get(envVar) ?? null,
       last4: last4(secret(envVar)),
-      circuit: circuits[id] ?? null,
+      circuit: providers[id]?.state ?? null,
+      // The chain entries this key serves: Gemini's covers Flash and Flash-Lite.
+      models: Object.entries(providers).filter(([name]) => name === id || name.startsWith(`${id}-`))
+        .map(([name, p]) => ({ provider: name, model: p.model, state: p.state, reopensAt: p.reopensAt })),
     })),
     email: { driver: emailDriver(), from: emailFrom() },
     storage: { driver: process.env.STORAGE_DRIVER || 'local' },

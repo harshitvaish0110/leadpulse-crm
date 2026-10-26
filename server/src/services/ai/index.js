@@ -6,7 +6,9 @@
  *
  * Providers are tried in order (providers.js). Per provider: one retry after 2 s
  * on a transient error (429/5xx, connection reset), otherwise straight to the next
- * provider. Providers with an open circuit breaker are skipped. A stream never
+ * provider. Providers with an open circuit breaker are skipped. A provider that
+ * asks for a long wait (a spent daily quota) isn't retried and is skipped until
+ * then. A stream never
  * falls back once text has reached the client — the user would see it twice — so a
  * mid-stream failure ends the stream with an `error` event instead. A client that
  * disconnects aborts the upstream request. Every attempt is written to `ai_logs`.
@@ -25,6 +27,11 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529]);
 const RETRYABLE_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
 
 const isRetryable = (err) => RETRYABLE_STATUS.has(Number(err?.status)) || RETRYABLE_CODES.has(err?.code ?? err?.cause?.code);
+
+// A wait longer than this is a spent quota, not a burst limit: skip the provider until then (at most a day).
+const QUOTA_WAIT_MS = 60_000;
+const MAX_SKIP_MS = 24 * 3_600_000;
+const quotaSpent = (err) => Number(err?.retryAfterMs) > QUOTA_WAIT_MS;
 
 const unavailable = (cause) => Object.assign(
   new ApiError('The AI service is temporarily unavailable. Please try again in a moment.', 502, 'AI_UNAVAILABLE'),
@@ -63,7 +70,7 @@ function createGateway({
   async function run(spec, opts, kind, call) {
     const providers = chain();
     if (!providers.length) {
-      throw new ApiError('No AI provider is configured. Add GEMINI_API_KEY, GROQ_API_KEY or OPENROUTER_API_KEY.', 503, 'AI_NOT_CONFIGURED');
+      throw new ApiError('No AI provider is configured. Add a Gemini, Groq or OpenRouter key in Settings → Integrations or .env.', 503, 'AI_NOT_CONFIGURED');
     }
 
     const state = { streamed: false };
@@ -91,13 +98,14 @@ function createGateway({
             throw Object.assign(new Error('Request aborted by the client'), { name: 'AbortError' });
           }
           lastErr = err;
-          breaker.failure(provider.name);
+          if (quotaSpent(err)) breaker.trip(provider.name, Math.min(err.retryAfterMs, MAX_SKIP_MS));
+          else breaker.failure(provider.name);
           if (state.streamed) {
             log({ ...entry, status: 'error', latencyMs, errorMessage: err.message });
             throw unavailable(err);
           }
           failed = { ...entry, latencyMs, errorMessage: err.message };
-          if (attempt === 2 || !isRetryable(err)) break;
+          if (attempt === 2 || !isRetryable(err) || quotaSpent(err)) break;
           await sleep(retryDelayMs, undefined, opts.signal ? { signal: opts.signal } : undefined);
         }
       }
@@ -181,7 +189,16 @@ function createGateway({
     return Object.fromEntries(DEFAULT_ORDER.map((name) => [name, PROVIDERS[name].enabled() ? breaker.state(name) : 'disabled']));
   }
 
-  return { getText, getJSON, stream, streamToResponse, providerStates };
+  /** Per provider: its model, breaker state and, while open, when it is tried again. For Settings → Integrations. */
+  function providerDetails() {
+    return Object.fromEntries(DEFAULT_ORDER.map((name) => [name, {
+      model: PROVIDERS[name].model(),
+      state: PROVIDERS[name].enabled() ? breaker.state(name) : 'disabled',
+      reopensAt: breaker.reopensAt(name),
+    }]));
+  }
+
+  return { getText, getJSON, stream, streamToResponse, providerStates, providerDetails };
 }
 
 module.exports = { ...createGateway(), createGateway, parseJSON, isRetryable };

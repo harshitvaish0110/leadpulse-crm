@@ -6,7 +6,9 @@
  *     complete(msgs, { maxTokens, temperature, json, signal }) → { text, tokens },
  *     stream(msgs, { maxTokens, temperature, signal }, onDelta) → { tokens } }
  * `msgs` are { role: 'system'|'user'|'assistant', content }. Errors carry the
- * HTTP `status` when there is one; the gateway decides about retries and fallback.
+ * HTTP `status` when there is one, and `retryAfterMs` when the provider said how
+ * long to wait (a spent daily quota says hours); the gateway decides about
+ * retries and fallback.
  * Model ids change as providers retire them, so each one comes from the environment.
  * API keys come from secrets.js: the environment, else a key saved in Settings.
  */
@@ -20,20 +22,46 @@ const { secret, keyedClient } = require('../../lib/secrets');
 const systemText = (msgs) => msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n') || undefined;
 const chatTurns = (msgs) => msgs.filter((m) => m.role !== 'system');
 
-function httpError(provider, status, body) {
+/**
+ * How long the provider asked us to wait, in ms, or null: a Retry-After header
+ * (seconds), Google's RetryInfo `"retryDelay": "55309s"`, or "Please retry in 15h21m49s".
+ */
+function retryAfterMs(text, header) {
+  const seconds = Number(header);
+  if (header && Number.isFinite(seconds)) return seconds * 1000;
+  const delay = /retryDelay\\?"\s*:\s*\\?"(\d+(?:\.\d+)?)s/.exec(String(text ?? ''));
+  if (delay) return Number(delay[1]) * 1000;
+  const human = /retry in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?/i.exec(String(text ?? ''));
+  if (human && (human[1] || human[2] || human[3])) return ((Number(human[1] ?? 0) * 60 + Number(human[2] ?? 0)) * 60 + Number(human[3] ?? 0)) * 1000;
+  return null;
+}
+
+function httpError(provider, status, body, retryAfterHeader) {
   let detail = String(body ?? '');
   try {
     const { error } = JSON.parse(body);
     // OpenRouter puts the upstream provider's reason in metadata.raw.
     detail = [error?.message, error?.metadata?.raw].filter(Boolean).join(': ') || detail;
   } catch { /* not JSON */ }
-  return Object.assign(new Error(`${provider} HTTP ${status}: ${detail.slice(0, 300)}`), { status });
+  return Object.assign(new Error(`${provider} HTTP ${status}: ${detail.slice(0, 300)}`), {
+    status, retryAfterMs: status === 429 ? retryAfterMs(body, retryAfterHeader) : null,
+  });
 }
 
+/** SDK errors (Gemini, Anthropic) carry the provider's wait in their message or headers. */
+const withRetryAfter = (err) => {
+  if (Number(err?.status) === 429 && err.retryAfterMs === undefined) {
+    err.retryAfterMs = retryAfterMs(err.message, err.headers?.['retry-after'] ?? err.headers?.get?.('retry-after'));
+  }
+  return err;
+};
+
 // ── Gemini (@google/genai) ─────────────────────────────────────────────────────
-function gemini() {
+// Two chain entries share the key: Flash, then Flash-Lite, whose free quota is
+// separate and larger, so a spent Flash quota falls through to Lite.
+function gemini({ name = 'gemini', modelEnv = 'GEMINI_MODEL', defaultModel = 'gemini-2.5-flash' } = {}) {
   const sdk = keyedClient('GEMINI_API_KEY', (apiKey) => new GoogleGenAI({ apiKey }));
-  const model = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = () => process.env[modelEnv] || defaultModel;
 
   const request = (msgs, { maxTokens, temperature, json, signal }) => ({
     model: model(),
@@ -51,18 +79,26 @@ function gemini() {
   const tokens = (usage) => usage?.totalTokenCount ?? 0;
 
   return {
-    name: 'gemini',
+    name,
     model,
     enabled: () => Boolean(secret('GEMINI_API_KEY')),
     async complete(msgs, opts) {
-      const res = await sdk().models.generateContent(request(msgs, opts));
-      return { text: res.text ?? '', tokens: tokens(res.usageMetadata) };
+      try {
+        const res = await sdk().models.generateContent(request(msgs, opts));
+        return { text: res.text ?? '', tokens: tokens(res.usageMetadata) };
+      } catch (err) {
+        throw withRetryAfter(err);
+      }
     },
     async stream(msgs, opts, onDelta) {
       let usage;
-      for await (const chunk of await sdk().models.generateContentStream(request(msgs, opts))) {
-        if (chunk.text) onDelta(chunk.text);
-        usage = chunk.usageMetadata ?? usage;
+      try {
+        for await (const chunk of await sdk().models.generateContentStream(request(msgs, opts))) {
+          if (chunk.text) onDelta(chunk.text);
+          usage = chunk.usageMetadata ?? usage;
+        }
+      } catch (err) {
+        throw withRetryAfter(err);
       }
       return { tokens: tokens(usage) };
     },
@@ -119,7 +155,7 @@ function openaiCompatible({ name, baseURL, keyEnv, modelEnv, defaultModel, jsonM
         ...extra(model()),
       }),
     });
-    if (!res.ok) throw httpError(name, res.status, await res.text().catch(() => ''));
+    if (!res.ok) throw httpError(name, res.status, await res.text().catch(() => ''), res.headers.get('retry-after'));
     return res;
   }
 
@@ -162,15 +198,23 @@ function anthropic() {
     model,
     enabled: () => Boolean(secret('ANTHROPIC_API_KEY')),
     async complete(msgs, opts) {
-      const res = await sdk().messages.create(body(msgs, opts), { signal: opts.signal });
-      return { text: res.content.filter((b) => b.type === 'text').map((b) => b.text).join(''), tokens: tokens(res.usage) };
+      try {
+        const res = await sdk().messages.create(body(msgs, opts), { signal: opts.signal });
+        return { text: res.content.filter((b) => b.type === 'text').map((b) => b.text).join(''), tokens: tokens(res.usage) };
+      } catch (err) {
+        throw withRetryAfter(err);
+      }
     },
     async stream(msgs, opts, onDelta) {
-      const stream = sdk().messages.stream(body(msgs, opts), { signal: opts.signal });
-      for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onDelta(event.delta.text);
+      try {
+        const stream = sdk().messages.stream(body(msgs, opts), { signal: opts.signal });
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onDelta(event.delta.text);
+        }
+        return { tokens: tokens((await stream.finalMessage()).usage) };
+      } catch (err) {
+        throw withRetryAfter(err);
       }
-      return { tokens: tokens((await stream.finalMessage()).usage) };
     },
   };
 }
@@ -198,6 +242,7 @@ function mock() {
 
 const PROVIDERS = {
   gemini: gemini(),
+  'gemini-lite': gemini({ name: 'gemini-lite', modelEnv: 'GEMINI_LITE_MODEL', defaultModel: 'gemini-2.5-flash-lite' }),
   groq: openaiCompatible({
     name: 'groq', baseURL: 'https://api.groq.com/openai/v1',
     keyEnv: 'GROQ_API_KEY', modelEnv: 'GROQ_MODEL', defaultModel: 'openai/gpt-oss-120b',
@@ -217,7 +262,7 @@ const PROVIDERS = {
   }),
 };
 
-const DEFAULT_ORDER = ['gemini', 'groq', 'openrouter', 'anthropic', 'openai'];
+const DEFAULT_ORDER = ['gemini', 'gemini-lite', 'groq', 'openrouter', 'anthropic', 'openai'];
 const MOCK = mock();
 
 /** Enabled providers in AI_PROVIDER_ORDER (or the default order); only the mock when AI_MOCK=true. */
@@ -227,4 +272,4 @@ function providerChain(env = process.env) {
   return order.map((name) => PROVIDERS[name]).filter((p) => p?.enabled());
 }
 
-module.exports = { PROVIDERS, DEFAULT_ORDER, providerChain, eventData, httpError };
+module.exports = { PROVIDERS, DEFAULT_ORDER, providerChain, eventData, httpError, retryAfterMs };
