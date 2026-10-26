@@ -10,6 +10,8 @@ import Avatar from '../../components/ui/Avatar';
 import Skeleton from '../../components/ui/Skeleton';
 import Input from '../../components/ui/Input';
 import SlideOver from '../../components/ui/SlideOver';
+import { CustomFieldInputs, CustomFieldValues } from '../../components/crm/CustomFields';
+import { customFieldPayload, customFieldState } from '../../lib/customFields';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import StreamingMarkdownCard from '../../components/ai/StreamingMarkdownCard';
@@ -20,7 +22,7 @@ import LogActivityModal from '../../components/activities/LogActivityModal';
 import Attachments from '../../components/deals/Attachments';
 import LostReasonDialog from '../../components/deals/LostReasonDialog';
 import ContactTasks from '../../components/contacts/ContactTasks';
-import { formatCurrency, formatDate, humanize, toPercent } from '../../lib/format';
+import { currencySymbol, formatCurrency, formatDate, humanize, toPercent } from '../../lib/format';
 import { qk } from '../../hooks/queries/keys';
 import { useDirectory, usePipelineStages } from '../../hooks/queries/lookups';
 import { useAuthStore } from '../../store/authStore';
@@ -122,12 +124,17 @@ function EditDealForm({ deal, onCancel, onSave, saving }) {
     title: deal.title, value: String(Number(deal.value)),
     expectedCloseDate: deal.expectedCloseDate ? deal.expectedCloseDate.slice(0, 10) : '',
   });
+  const [custom, setCustom] = useState(() => customFieldState(deal.customFields));
   const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave({ ...form, expectedCloseDate: form.expectedCloseDate || null }); }} className="space-y-4">
+    <form onSubmit={e => {
+      e.preventDefault();
+      onSave({ ...form, expectedCloseDate: form.expectedCloseDate || null, customFields: customFieldPayload(custom, deal.customFields ?? {}) });
+    }} className="space-y-4">
       <Input label="Title" required value={form.title} onChange={set('title')} />
-      <Input label="Value ($)" type="number" min="0" required value={form.value} onChange={set('value')} />
+      <Input label={`Value (${currencySymbol()})`} type="number" min="0" required value={form.value} onChange={set('value')} />
       <Input label="Expected close date" type="date" value={form.expectedCloseDate} onChange={set('expectedCloseDate')} />
+      <CustomFieldInputs entity="DEAL" values={custom} onChange={(key, value) => setCustom(p => ({ ...p, [key]: value }))} />
       <div className="flex gap-3">
         <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">Cancel</Button>
         <Button type="submit" loading={saving} className="flex-1">Save Changes</Button>
@@ -261,6 +268,7 @@ export default function DealDetail() {
                 </div>
               )}
             </dl>
+            <div className="mt-5"><CustomFieldValues entity="DEAL" values={deal.customFields} /></div>
           </div>
 
           <DealNotes key={deal.id} dealId={deal.id} initialNotes={deal.notes} />
