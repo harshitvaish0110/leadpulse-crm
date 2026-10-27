@@ -72,6 +72,7 @@ function checkQuery(raw) {
         minWinProbability: num(raw.minWinProbability, 0, 1),
         maxWinProbability: num(raw.maxWinProbability, 0, 1),
         stalledDays: num(raw.stalledDays, 1, 3650),
+        company: word(raw.company),
         owner: word(raw.owner),
         sort: choice(raw.sort, ['value', 'closeDate', 'winProbability', 'stalled'], 'value'),
         limit,
@@ -86,6 +87,7 @@ function checkQuery(raw) {
         maxSentiment: num(raw.maxSentiment, 0, 1),
         noContactDays: num(raw.noContactDays, 1, 3650),
         tag: word(raw.tag, 40),
+        company: word(raw.company),
         owner: word(raw.owner),
         sort: choice(raw.sort, ['leadScore', 'churnRisk', 'sentiment', 'newest'], 'leadScore'),
         limit,
@@ -96,6 +98,7 @@ function checkQuery(raw) {
         due: choice(raw.due, ['overdue', 'today', 'week', 'any'], 'any'),
         priorities: picks(raw.priorities ?? raw.priority, PRIORITIES),
         mine: raw.mine === true ? true : undefined,
+        company: word(raw.company),
         owner: word(raw.owner),
         limit,
       });
@@ -106,6 +109,7 @@ function checkQuery(raw) {
         status: choice(raw.status, ['open', 'won', 'lost'], 'open'),
         closeFrom: date(raw.closeFrom),
         closeTo: date(raw.closeTo),
+        company: word(raw.company),
         owner: word(raw.owner),
       });
     default:
@@ -149,9 +153,13 @@ function describe(q) {
   if (q.tag) bits.push(`tagged "${q.tag}"`);
   if (q.priorities) bits.push(`priority ${q.priorities.join(' or ')}`);
   if (q.mine) bits.push('assigned to the user');
+  if (q.company) bits.push(`at a company whose name contains "${q.company}"`);
   if (q.owner) bits.push(`owned by "${q.owner}"`);
   return bits.length ? ` ${bits.join(', ')}` : '';
 }
+
+/** Records of a contact at a company whose name contains `company` (case-insensitive). */
+const atCompany = (company) => (company ? { company: { name: { contains: company, mode: 'insensitive' } } } : undefined);
 
 const header = (q, text) => ({ recordType: 'query', recordId: q.tool, content: `Query result (complete, straight from the database): ${text}` });
 const listed = (shown, total, order) => (shown ? `The ${shown === total ? `${shown}` : `first ${shown} of the ${total}`} listed next are sorted by ${order}.` : 'None match.');
@@ -167,6 +175,7 @@ async function runDeals(user, q, ctx) {
     winProbability: q.minWinProbability !== undefined || q.maxWinProbability !== undefined
       ? compact({ gte: q.minWinProbability, lte: q.maxWinProbability }) : undefined,
     stageChangedAt: q.stalledDays ? { lte: new Date(ctx.now.getTime() - q.stalledDays * DAY_MS) } : undefined,
+    contact: atCompany(q.company),
     ownerId: owners ? { in: owners } : undefined,
   }));
   const orderBy = {
@@ -208,6 +217,7 @@ async function runContacts(user, q, ctx) {
     sentimentScore: q.maxSentiment !== undefined ? { lte: q.maxSentiment } : undefined,
     activities: q.noContactDays ? { none: { occurredAt: { gte: new Date(ctx.now.getTime() - q.noContactDays * DAY_MS) } } } : undefined,
     tags: q.tag ? { has: q.tag } : undefined,
+    ...atCompany(q.company),
     ownerId: owners ? { in: owners } : undefined,
   }));
   const orderBy = { leadScore: { leadScore: 'desc' }, churnRisk: { churnRisk: 'desc' }, sentiment: { sentimentScore: 'asc' }, newest: { createdAt: 'desc' } }[q.sort];
@@ -244,6 +254,7 @@ async function runTasks(user, q, ctx) {
     completed: false,
     dueDate,
     priority: q.priorities ? { in: q.priorities } : undefined,
+    contact: atCompany(q.company),
     assignedToId: q.mine ? user.id : owners ? { in: owners } : undefined,
   }));
   const [rows, count] = await Promise.all([
@@ -274,6 +285,7 @@ async function runSummary(user, q, ctx) {
     where: scoped(user, 'deal', compact({
       stage: { in: { open: OPEN, won: ['CLOSED_WON'], lost: ['CLOSED_LOST'] }[q.status] },
       [closedBy]: range(q.closeFrom, q.closeTo, ctx.tz),
+      contact: atCompany(q.company),
       ownerId: owners ? { in: owners } : undefined,
     })),
     select: { value: true, winProbability: true, stage: true, expectedCloseDate: true, closedAt: true, owner: { select: { firstName: true, lastName: true } } },

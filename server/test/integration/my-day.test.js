@@ -118,3 +118,28 @@ test('My Day lists the user\'s own tasks by day, and the briefing is written on 
   assert.equal(await prisma.dailyBriefing.count({ where: { userId: sarah.user.id, date: today } }), 1, 'rewriting replaces the day\'s briefing');
   assert.equal((await get(mike, '/api/my-day').expect(200)).body.day.briefing?.content === written.content, false, 'briefings are per user');
 });
+
+test('"contacts of <company>" lists exactly the caller\'s contacts there', async () => {
+  const company = await prisma.company.findFirstOrThrow({
+    where: { AND: [{ contacts: { some: { ownerId: sarah.user.id } } }, { contacts: { some: { ownerId: { not: sarah.user.id } } } }] },
+    select: { id: true, name: true },
+    orderBy: { name: 'asc' },
+  });
+  const { sources } = await ask(sarah, `give me all contacts of ${company.name}`);
+  const mine = await prisma.contact.findMany({ where: { companyId: company.id, ownerId: sarah.user.id }, select: { id: true } });
+  const listed = sources.filter((s) => s.type === 'contact').map((s) => s.id).sort();
+  assert.deepEqual(listed, mine.map((c) => c.id).sort(), 'all of hers at that company, and nobody else\'s');
+});
+
+test('"what should I focus on today?" answers from the caller\'s day', async () => {
+  const task = await prisma.task.create({
+    // The most overdue task, so it is among the few the answer's links show first.
+    data: { title: 'Focus check overdue', dueDate: new Date(Date.now() - 400 * 86_400_000), priority: 'HIGH', assignedToId: sarah.user.id, createdById: sarah.user.id },
+  });
+  created.tasks.push(task.id);
+  const { sources, done } = await ask(sarah, 'What should I focus on today?');
+  assert.ok(done);
+  assert.ok(sources.some((s) => s.type === 'task' && s.id === task.id), 'her overdue task is a source');
+  const tasks = await prisma.task.findMany({ where: { id: { in: sources.filter((s) => s.type === 'task').map((s) => s.id) } }, select: { assignedToId: true } });
+  assert.ok(tasks.every((t) => t.assignedToId === sarah.user.id), 'only her own tasks');
+});
