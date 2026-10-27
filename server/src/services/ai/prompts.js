@@ -347,6 +347,7 @@ function dailyBriefing({ userName, today, facts }) {
 function planQueries({ question, history = [], today }) {
   const earlier = history.filter((m) => m.role === 'user').slice(-2).map((m) => `- ${clip(m.content, 300)}`).join('\n');
   const over = /\b(?:over|above|more than|at least)\s+\$?(\d+(?:\.\d+)?)\s*(k|m)?\b/i.exec(question);
+  const companyAsked = /\bcontacts?\s+(?:of|at|from)\s+([A-Z][\w&.,' -]*?)\s*\??$/i.exec(question.trim());
   return {
     feature: 'plan_queries',
     messages: messages(
@@ -360,11 +361,13 @@ ${clip(question, 1000)}
 Tools and their optional parameters:
 - deals: status open|won|lost|any (default open), stages [LEAD|CONTACTED|DEMO|PROPOSAL|NEGOTIATION|CLOSED_WON|CLOSED_LOST], minValue, maxValue,
   closeFrom, closeTo (expected close date for open deals, close date for won/lost), minWinProbability, maxWinProbability (0-1),
-  stalledDays (no stage change for N days), owner (a person's name), sort value|closeDate|winProbability|stalled, limit (max 10)
+  stalledDays (no stage change for N days), company, owner (a person's name), sort value|closeDate|winProbability|stalled, limit (max 10)
 - contacts: statuses [LEAD|ACTIVE|INACTIVE|CHURNED], scoreLabels [HOT|WARM|COLD], minLeadScore (0-120), minChurnRisk (0-1), maxSentiment (0-1),
-  noContactDays (no activity for N days), tag, owner, sort leadScore|churnRisk|sentiment|newest, limit (max 10)
-- tasks: due overdue|today|week|any, priorities [LOW|MEDIUM|HIGH], mine (true = assigned to the user), owner, limit (max 10)
-- pipeline_summary: groupBy stage|owner|month, status open|won|lost, closeFrom, closeTo, owner — counts and totals, no rows
+  noContactDays (no activity for N days), tag, company, owner, sort leadScore|churnRisk|sentiment|newest, limit (max 10)
+- tasks: due overdue|today|week|any, priorities [LOW|MEDIUM|HIGH], mine (true = assigned to the user), company, owner, limit (max 10)
+- pipeline_summary: groupBy stage|owner|month, status open|won|lost, closeFrom, closeTo, company, owner — counts and totals, no rows
+"company" is the name of the company (account) the records belong to, e.g. "contacts at Block Group" → {"tool": "contacts", "company": "Block Group"}.
+A tag is a label such as "Partner" or "Referral", never a company name.
 Return JSON only: {"queries": [{"tool": "deals", "minValue": 100000, "closeFrom": "2026-10-01", "closeTo": "2026-10-31", "sort": "value"}]}`,
     ),
     maxTokens: 500,
@@ -372,11 +375,11 @@ Return JSON only: {"queries": [{"tool": "deals", "minValue": 100000, "closeFrom"
     json: true,
     schema: '{"queries": [{"tool": string, ...parameters}]}',
     normalise: (o) => ({ queries: Array.isArray(o.queries) ? o.queries.filter((q) => q && typeof q === 'object').slice(0, 2) : [] }),
-    // The mock understands one pattern, "deals over N", so tests can exercise the whole path.
+    // The mock understands two patterns, "deals over N" and "contacts of/at <Company>", so tests can exercise the whole path.
     mock: {
       queries: over && /\bdeals?\b/i.test(question)
         ? [{ tool: 'deals', minValue: Number(over[1]) * ({ k: 1e3, m: 1e6 }[over[2]?.toLowerCase()] ?? 1), sort: 'value' }]
-        : [],
+        : companyAsked ? [{ tool: 'contacts', company: companyAsked[1].trim() }] : [],
     },
   };
 }

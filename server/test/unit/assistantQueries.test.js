@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { checkQuery } = require('../../src/services/crmQueries.service');
-const { wantsQueries, citedRecords } = require('../../src/services/chat.service');
+const { wantsQueries, wantsDay, citedRecords } = require('../../src/services/chat.service');
 const { startOfDay, dayBoundary } = require('../../src/lib/dates');
 const prompts = require('../../src/services/ai/prompts');
 
@@ -17,10 +17,11 @@ test('query parameters are checked per tool', () => {
     { tool: 'contacts', statuses: ['LEAD'], scoreLabels: ['HOT'], minChurnRisk: 0, sort: 'leadScore', limit: 3 });
   assert.deepEqual(checkQuery({ tool: 'tasks', due: 'yesterday', mine: 'yes', priority: 'high' }), { tool: 'tasks', due: 'any', priorities: ['HIGH'], limit: 10 });
   assert.deepEqual(checkQuery({ tool: 'pipeline_summary', groupBy: 'colour' }), { tool: 'pipeline_summary', groupBy: 'stage', status: 'open' });
+  assert.deepEqual(checkQuery({ tool: 'contacts', company: '  Block Group ' }), { tool: 'contacts', company: 'Block Group', sort: 'leadScore', limit: 10 });
 });
 
 test('only questions that filter, rank or count records cost a planning call', () => {
-  for (const q of ['Which deals over 100k close this month?', 'How many tasks are overdue?', 'list hot leads', 'total pipeline by stage']) assert.equal(wantsQueries(q), true, q);
+  for (const q of ['Which deals over 100k close this month?', 'How many tasks are overdue?', 'list hot leads', 'total pipeline by stage', 'give me all contacts of Block Group']) assert.equal(wantsQueries(q), true, q);
   for (const q of ['What did Art say about pricing?', 'Draft an email to Art', 'hello']) assert.equal(wantsQueries(q), false, q);
 });
 
@@ -44,8 +45,14 @@ test('days start at local midnight, across DST and far-east timezones', () => {
   assert.equal(dayBoundary('2026-10-26', 'Pacific/Kiritimati').toISOString(), '2026-10-25T10:00:00.000Z');
 });
 
+test("questions about the day get My Day's facts", () => {
+  for (const q of ['What should I focus on today?', "What's on my plate this week?", 'Anything urgent?', 'What should I work on first?']) assert.equal(wantsDay(q), true, q);
+  for (const q of ['What did Art say about pricing?', 'Draft an email to Art']) assert.equal(wantsDay(q), false, q);
+});
+
 test('the planner mock and the briefing tidy-up behave', () => {
   assert.deepEqual(prompts.planQueries({ question: 'deals above 1.5m', today: 'x' }).mock.queries, [{ tool: 'deals', minValue: 1500000, sort: 'value' }]);
   assert.deepEqual(prompts.planQueries({ question: 'who is Art?', today: 'x' }).mock.queries, []);
+  assert.deepEqual(prompts.planQueries({ question: 'give me all contacts of Block Group', today: 'x' }).mock.queries, [{ tool: 'contacts', company: 'Block Group' }]);
   assert.equal(prompts.dailyBriefing({ userName: 'Sarah', today: 'x', facts: 'y' }).finish('Good morning, Sarah! Two tasks are overdue.'), 'Two tasks are overdue.');
 });

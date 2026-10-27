@@ -8,7 +8,9 @@
  * Questions that filter, rank or count ("deals over 100k closing this month")
  * are also turned into checked, scoped database queries (crmQueries), whose
  * complete results come first. Questions about the pipeline as a whole (hottest
- * leads, risk, closing deals) also get a live snapshot of the caller's book. When
+ * leads, risk, closing deals) also get a live snapshot of the caller's book, and
+ * questions about the day ("what should I focus on today?") get the facts My Day
+ * shows: tasks due, deals closing or stalled, accounts at risk, next steps. When
  * the user asked for something to be done, the proposed actions are stored as
  * PENDING for them to approve; nothing is executed here.
  */
@@ -25,6 +27,7 @@ const prompts = require('./ai/prompts');
 const semanticIndex = require('./semanticIndex.service');
 const actions = require('./actions.service');
 const crmQueries = require('./crmQueries.service');
+const myDay = require('./myDay.service');
 const { localDate, orgTimezone } = require('./nightly.service');
 const { money } = require('../lib/workspace');
 
@@ -38,8 +41,12 @@ const OPEN_STAGES = ['LEAD', 'CONTACTED', 'DEMO', 'PROPOSAL', 'NEGOTIATION'];
 
 // Planning queries costs an LLM call, so it only happens when the question names records and a filter, ranking or count.
 const RECORDS = /\b(deals?|opportunit\w*|pipeline|contacts?|leads?|customers?|accounts?|people|tasks?|to-?dos?)\b/i;
-const FILTERS = /\b(over|under|above|below|more than|less than|at least|between|\d+\s*k\b|\$?\d{3,}|clos\w*|won|lost|due|overdue|today|tomorrow|this (week|month|quarter|year)|next (week|month|quarter)|last (week|month|quarter|year)|q[1-4]|stalled|stuck|no (contact|activity)|haven'?t|inactive|churn\w*|hot|warm|cold|stage|status|owned|which|list|show|top|biggest|largest|highest|lowest|most|least|how many|how much|total|count|sum|average)\b/i;
+const FILTERS = /\b(all|every|any|give|get|find|at|from|of|whose|over|under|above|below|more than|less than|at least|between|\d+\s*k\b|\$?\d{3,}|clos\w*|won|lost|due|overdue|today|tomorrow|this (week|month|quarter|year)|next (week|month|quarter)|last (week|month|quarter|year)|q[1-4]|stalled|stuck|no (contact|activity)|haven'?t|inactive|churn\w*|hot|warm|cold|stage|status|owned|which|list|show|top|biggest|largest|highest|lowest|most|least|how many|how much|total|count|sum|average)\b/i;
 const wantsQueries = (question) => RECORDS.test(question) && FILTERS.test(question);
+
+// Questions about what to do now, answered from the same facts as My Day.
+const DAY = /\b(focus|priorit\w*|today|tonight|this morning|this week|my day|on my plate|urgent|to-?dos?|agenda|work on|start with|what should i|what do i (?:need|have))\b/i;
+const wantsDay = (question) => DAY.test(question);
 
 const fullName = (p) => `${p.firstName} ${p.lastName}`;
 const pct = (p) => `${Math.round((p ?? 0) * 100)}%`;
@@ -71,10 +78,28 @@ async function pipelineSnapshot(user, today) {
     `Open deals: ${open.length} worth ${money(open.reduce((t, d) => t + Number(d.value), 0))}, weighted by win probability ${money(open.reduce((t, d) => t + Number(d.value) * d.winProbability, 0))}. By stage: ${byStage || 'none'}.`,
     `Expected to close in the next 30 days: ${closing.map((d) => `${d.title} (${d.stage}, ${money(d.value)}, ${pct(d.winProbability)} win probability, ${d.expectedCloseDate.toISOString().slice(0, 10)})`).join('; ') || 'none'}.`,
   ].join('\n');
-  // The records it names become source chips too.
+  // The records it names become source chips too, when the answer cites the snapshot.
   const refs = [...hot, ...risky].map((c) => ({ recordType: 'contact', recordId: c.id }))
     .concat(closing.map((d) => ({ recordType: 'deal', recordId: d.id })));
-  return { record: { recordType: 'snapshot', recordId: 'pipeline', content }, refs };
+  return { recordType: 'snapshot', recordId: 'pipeline', content, refs };
+}
+
+/** The caller's day, as My Day shows it, as one record; its tasks, deals and contacts become chips when it is cited. */
+async function daySnapshot(user) {
+  const day = await myDay.myDay(user);
+  const task = (t) => ({ recordType: 'task', recordId: t.id });
+  const deal = (d) => ({ recordType: 'deal', recordId: d.id });
+  const contact = (id) => ({ recordType: 'contact', recordId: id });
+  // Most urgent first and a few of each kind, so the chips (at most 12) cover what the answer talks about.
+  const refs = [
+    ...[...day.tasks.overdue, ...day.tasks.today].slice(0, 4).map(task),
+    ...day.closing.slice(0, 3).map(deal),
+    ...day.nextActions.slice(0, 2).map((a) => contact(a.contact.id)),
+    ...day.atRisk.slice(0, 2).map((c) => contact(c.id)),
+    ...day.stalled.slice(0, 1).map(deal),
+  ];
+  const content = `${user.firstName}'s day (${day.date}), from their own book, as on My Day:\n${myDay.briefingFacts(day)}`;
+  return { recordType: 'snapshot', recordId: 'my-day', content, refs };
 }
 
 /**
@@ -165,18 +190,14 @@ async function ask(user, { conversationId, question }, res) {
   sseStart(res);
   try {
     let chunks;
-    let snapshotRefs = [];
     try {
-      const [hits, queried] = await Promise.all([
+      const [hits, queried, overview, dayRecord] = await Promise.all([
         semanticIndex.search(user, question, { limit: 6 }),
         wantsQueries(question) ? runPlannedQueries(user, { question, history, today, tz, signal, log }) : [],
+        AGGREGATE.test(question) ? pipelineSnapshot(user, today) : null,
+        wantsDay(question) ? daySnapshot(user) : null,
       ]);
-      chunks = [...queried, ...hits];
-      if (AGGREGATE.test(question)) {
-        const snapshot = await pipelineSnapshot(user, today);
-        chunks = [...queried, snapshot.record, ...hits];
-        snapshotRefs = snapshot.refs;
-      }
+      chunks = [...queried, ...[dayRecord, overview].filter(Boolean), ...hits];
     } catch (err) {
       logger.error({ event: 'retrieval_failed', err: err.message }, 'Chat retrieval failed');
       sseSend(res, 'error', { code: 'RETRIEVAL_FAILED', message: 'Your CRM data could not be searched right now. Please try again.' });
@@ -202,9 +223,8 @@ async function ask(user, { conversationId, question }, res) {
 
     const answered = !answer.trim().startsWith(prompts.NO_ANSWER.slice(0, 30));
     // Chips for the records the answer cites; every record when it cites none (or the model numbered them oddly).
-    const cited = citedRecords(answer, chunks);
-    const usedSnapshot = !cited || cited.some((c) => c.recordType === 'snapshot');
-    const refs = await resolveSources([...(cited ?? chunks), ...(usedSnapshot ? snapshotRefs : [])]);
+    const used = citedRecords(answer, chunks) ?? chunks;
+    const refs = await resolveSources([...used, ...used.flatMap((c) => c.refs ?? [])]);
     const seen = new Set();
     const sources = answered ? refs.filter((r) => !seen.has(`${r.type}:${r.id}`) && seen.add(`${r.type}:${r.id}`)).slice(0, 12) : [];
     sseSend(res, 'sources', { sources });
@@ -260,4 +280,4 @@ async function deleteConversation(user, id) {
   if (!count) throw ApiError.notFound('Conversation not found');
 }
 
-module.exports = { ask, listConversations, getConversation, deleteConversation, resolveSources, calendarNote, wantsQueries, citedRecords };
+module.exports = { ask, listConversations, getConversation, deleteConversation, resolveSources, calendarNote, wantsQueries, wantsDay, citedRecords };
