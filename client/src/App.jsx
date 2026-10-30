@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Toaster } from 'react-hot-toast';
+import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import toast, { Toaster } from 'react-hot-toast';
 import PrivateRoute from './components/layout/PrivateRoute';
 import RoleRoute from './components/layout/RoleRoute';
 import AppShell from './components/layout/AppShell';
@@ -15,32 +15,40 @@ import Register from './pages/auth/Register';
 import AcceptInvite from './pages/auth/AcceptInvite';
 
 // App pages load on first visit (charts and drag-and-drop stay out of the login bundle).
-const Dashboard            = lazy(() => import('./pages/Dashboard'));
-const MyDay                = lazy(() => import('./pages/MyDay'));
-const ContactsList         = lazy(() => import('./pages/contacts/ContactsList'));
-const ContactDetail        = lazy(() => import('./pages/contacts/ContactDetail'));
-const CompaniesList        = lazy(() => import('./pages/companies/CompaniesList'));
-const CompanyDetail        = lazy(() => import('./pages/companies/CompanyDetail'));
-const DealsPipeline        = lazy(() => import('./pages/deals/DealsPipeline'));
-const DealDetail           = lazy(() => import('./pages/deals/DealDetail'));
-const Activities           = lazy(() => import('./pages/Activities'));
-const Tasks                = lazy(() => import('./pages/Tasks'));
-const Analytics            = lazy(() => import('./pages/Analytics'));
-const AIAssistant          = lazy(() => import('./pages/AIAssistant'));
-const SettingsLayout       = lazy(() => import('./pages/settings/SettingsLayout'));
-const ProfileSettings      = lazy(() => import('./pages/settings/ProfileSettings'));
-const GeneralSettings      = lazy(() => import('./pages/settings/GeneralSettings'));
-const PipelineSettings     = lazy(() => import('./pages/settings/PipelineSettings'));
-const FieldsSettings       = lazy(() => import('./pages/settings/FieldsSettings'));
-const UsersSettings        = lazy(() => import('./pages/settings/UsersSettings'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const MyDay = lazy(() => import('./pages/MyDay'));
+const ContactsList = lazy(() => import('./pages/contacts/ContactsList'));
+const ContactDetail = lazy(() => import('./pages/contacts/ContactDetail'));
+const CompaniesList = lazy(() => import('./pages/companies/CompaniesList'));
+const CompanyDetail = lazy(() => import('./pages/companies/CompanyDetail'));
+const DealsPipeline = lazy(() => import('./pages/deals/DealsPipeline'));
+const DealDetail = lazy(() => import('./pages/deals/DealDetail'));
+const Activities = lazy(() => import('./pages/Activities'));
+const Tasks = lazy(() => import('./pages/Tasks'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const AIAssistant = lazy(() => import('./pages/AIAssistant'));
+const SettingsLayout = lazy(() => import('./pages/settings/SettingsLayout'));
+const ProfileSettings = lazy(() => import('./pages/settings/ProfileSettings'));
+const GeneralSettings = lazy(() => import('./pages/settings/GeneralSettings'));
+const PipelineSettings = lazy(() => import('./pages/settings/PipelineSettings'));
+const FieldsSettings = lazy(() => import('./pages/settings/FieldsSettings'));
+const UsersSettings = lazy(() => import('./pages/settings/UsersSettings'));
 const IntegrationsSettings = lazy(() => import('./pages/settings/IntegrationsSettings'));
-const WebhooksSettings     = lazy(() => import('./pages/settings/WebhooksSettings'));
-const AuditLogSettings     = lazy(() => import('./pages/settings/AuditLogSettings'));
+const WebhooksSettings = lazy(() => import('./pages/settings/WebhooksSettings'));
+const AuditLogSettings = lazy(() => import('./pages/settings/AuditLogSettings'));
+
+// Free hosting sleeps when idle and takes about a minute to wake: keep retrying
+// timeouts and 5xx (1 s, 2 s, 4 s apart), but a 4xx answer is final.
+const transient = (err) => !err.response || err.response.status >= 500;
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { staleTime: 30 * 1000, retry: 1 },
+    queries: { staleTime: 30 * 1000, retry: (failures, err) => failures < 3 && transient(err) },
   },
+  // Once a load has finally failed, say so instead of leaving an empty page.
+  queryCache: new QueryCache({
+    onError: (err) => transient(err) && toast.error("Couldn't reach the server. Please try again.", { id: 'load-error' }),
+  }),
 });
 
 /** Restores the session from the refresh cookie once per page load. */
@@ -74,36 +82,36 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/login"    element={<Login />} />
+          <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/accept-invite" element={<AcceptInvite />} />
 
           <Route element={<PrivateRoute />}>
             <Route element={<AppShell fallback={<PageFallback />} />}>
-              <Route path="/"                  element={<Home />} />
-              <Route path="/my-day"            element={<MyDay />} />
-              <Route path="/dashboard"         element={<Dashboard />} />
-              <Route path="/contacts"          element={<ContactsList />} />
-              <Route path="/contacts/:id"      element={<ContactDetail />} />
-              <Route path="/companies"         element={<CompaniesList />} />
-              <Route path="/companies/:id"     element={<CompanyDetail />} />
-              <Route path="/deals"             element={<DealsPipeline />} />
-              <Route path="/deals/:id"         element={<DealDetail />} />
-              <Route path="/activities"        element={<Activities />} />
-              <Route path="/tasks"             element={<Tasks />} />
-              <Route path="/analytics"         element={<Analytics />} />
-              <Route path="/ai-assistant"      element={<AIAssistant />} />
+              <Route path="/" element={<Home />} />
+              <Route path="/my-day" element={<MyDay />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/contacts" element={<ContactsList />} />
+              <Route path="/contacts/:id" element={<ContactDetail />} />
+              <Route path="/companies" element={<CompaniesList />} />
+              <Route path="/companies/:id" element={<CompanyDetail />} />
+              <Route path="/deals" element={<DealsPipeline />} />
+              <Route path="/deals/:id" element={<DealDetail />} />
+              <Route path="/activities" element={<Activities />} />
+              <Route path="/tasks" element={<Tasks />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/ai-assistant" element={<AIAssistant />} />
               <Route path="/settings" element={<Suspense fallback={<PageFallback />}><SettingsLayout /></Suspense>}>
                 <Route index element={<Navigate to="/settings/profile" replace />} />
                 <Route path="profile" element={<ProfileSettings />} />
                 <Route element={<RoleRoute roles={['ADMIN']} />}>
-                  <Route path="general"      element={<GeneralSettings />} />
-                  <Route path="pipeline"     element={<PipelineSettings />} />
-                  <Route path="fields"       element={<FieldsSettings />} />
-                  <Route path="users"        element={<UsersSettings />} />
+                  <Route path="general" element={<GeneralSettings />} />
+                  <Route path="pipeline" element={<PipelineSettings />} />
+                  <Route path="fields" element={<FieldsSettings />} />
+                  <Route path="users" element={<UsersSettings />} />
                   <Route path="integrations" element={<IntegrationsSettings />} />
-                  <Route path="webhooks"     element={<WebhooksSettings />} />
-                  <Route path="audit"        element={<AuditLogSettings />} />
+                  <Route path="webhooks" element={<WebhooksSettings />} />
+                  <Route path="audit" element={<AuditLogSettings />} />
                 </Route>
               </Route>
             </Route>
