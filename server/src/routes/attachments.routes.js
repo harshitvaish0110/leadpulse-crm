@@ -63,7 +63,7 @@ router.post('/', upload.single('file'), async (req, res) => {
   else await assertContactInScope(req.user, contactId);
 
   const key = storage.newKey('attachment', req.file.originalname);
-  await storage.put(key, req.file.buffer);
+  await storage.put(key, req.file.buffer, req.file.mimetype.split(';')[0]);
   try {
     const attachment = await prisma.attachment.create({
       data: {
@@ -87,7 +87,7 @@ router.get('/:id/url', async (req, res) => {
     select: { storageKey: true, fileName: true },
   });
   if (!attachment) throw ApiError.notFound('Attachment not found');
-  res.json({ success: true, ...storage.signedUrl(attachment.storageKey, attachment.fileName) });
+  res.json({ success: true, ...(await storage.signedUrl(attachment.storageKey, attachment.fileName)) });
 });
 
 router.delete('/:id', async (req, res) => {

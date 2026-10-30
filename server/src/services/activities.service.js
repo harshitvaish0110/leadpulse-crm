@@ -89,7 +89,7 @@ async function logRecording(user, { contactId, dealId, occurredAt, file }) {
   if (Number.isNaN(when.getTime())) throw ApiError.validation([{ path: 'occurredAt', msg: 'occurredAt must be a date' }]);
 
   const key = storage.newKey('audio', `call${AUDIO_EXTENSIONS[file.mimetype.split(';')[0]] ?? '.webm'}`);
-  await storage.put(key, file.buffer);
+  await storage.put(key, file.buffer, file.mimetype.split(';')[0]);
   const activity = await prisma.activity.create({
     data: {
       type: 'TRANSCRIPT', subject: 'Call recording', audioKey: key, metadata: { status: 'processing' },
