@@ -12,14 +12,14 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env'), quiet: true });
 
 const { PrismaClient } = require('@prisma/client');
-const { PrismaPg }     = require('@prisma/adapter-pg');
-const { Pool }         = require('pg');
+const { PrismaPg } = require('@prisma/adapter-pg');
+const { Pool } = require('pg');
 
 // Connection pool — shared across all requests
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   // Reasonable defaults for a Node.js API server
-  max: 20,
+  max: Number(process.env.DB_POOL_MAX || 20),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
 });
@@ -39,7 +39,7 @@ const shutdown = async () => {
   await pool.end();
 };
 
-process.on('SIGINT',  shutdown);
+process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 module.exports = { prisma, pool };
