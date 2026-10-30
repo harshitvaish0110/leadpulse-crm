@@ -1,0 +1,12 @@
+{
+    "rewrites": [
+        {
+            "source": "/api/auth/:path*",
+            "destination": "https://leadpulse-api-653o.onrender.com/api/auth/:path*"
+        },
+        {
+            "source": "/((?!api/).*)",
+            "destination": "/index.html"
+        }
+    ]
+}
