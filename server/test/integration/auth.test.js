@@ -39,6 +39,7 @@ test('bad credentials are 401 and malformed input is 422', async () => {
   const invalid = await request(app).post('/api/auth/login').send({ email: 'not-an-email' }).expect(422);
   assert.equal(invalid.body.code, 'VALIDATION_ERROR');
   assert.ok(Array.isArray(invalid.body.details));
+  assert.ok(invalid.body.details.every((d) => !('value' in d)), 'submitted values are never echoed back');
 });
 
 test('refresh requires the X-Requested-With header', async () => {

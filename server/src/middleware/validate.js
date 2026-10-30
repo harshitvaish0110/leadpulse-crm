@@ -11,7 +11,8 @@ const validate = (rules) => [
   ...rules,
   (req, _res, next) => {
     const errors = validationResult(req);
-    next(errors.isEmpty() ? undefined : ApiError.validation(errors.array()));
+    // Drop `value`: it would echo back what was sent, passwords included.
+    next(errors.isEmpty() ? undefined : ApiError.validation(errors.array().map(({ value, ...error }) => error)));
   },
 ];
 
