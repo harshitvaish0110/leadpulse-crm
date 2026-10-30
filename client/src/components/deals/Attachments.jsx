@@ -52,7 +52,7 @@ export default function Attachments({ dealId, contactId }) {
     try {
       const { data } = await api.get(`/api/attachments/${id}/url`);
       // The file is served as an attachment, so following the link downloads it in place.
-      Object.assign(document.createElement('a'), { href: `${API_BASE}${data.url}`, rel: 'noopener' }).click();
+      Object.assign(document.createElement('a'), { href: data.url.startsWith('http') ? data.url : `${API_BASE}${data.url}`, rel: 'noopener' }).click();
     } catch {
       toast.error('Could not create a download link');
     }
