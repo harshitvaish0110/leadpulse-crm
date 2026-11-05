@@ -21,6 +21,26 @@ const PERSONAL_RESOURCES = new Set(['aiConversation', 'aiActionRequest', 'notifi
 const isPrivileged = (user) => PRIVILEGED_ROLES.has(user?.role);
 
 /**
+ * Public demo accounts (DEMO_ACCOUNT_EMAILS, comma-separated) can explore and edit, but not
+ * delete, hand records away, upload files, send email or change the account — so one visitor
+ * can't lock out or empty the demo for the next.
+ */
+const DEMO_BLOCKED = new Set([
+  'POST /api/auth/change-password', 'PATCH /api/auth/me',
+  'POST /api/attachments', 'POST /api/activities/upload-audio',
+]);
+
+const isDemo = (user) => (process.env.DEMO_ACCOUNT_EMAILS || '').split(',').some((e) => e.trim().toLowerCase() === user.email);
+
+function demoBlocked(req) {
+  const route = `${req.method} ${req.baseUrl}${req.path}`.replace(/\/$/, '');
+  return req.method === 'DELETE'
+    || DEMO_BLOCKED.has(route)
+    || /^POST \/api\/emails\/[^/]+\/send$/.test(route)
+    || (route === 'POST /api/contacts/bulk' && ['delete', 'assign'].includes(req.body?.action));
+}
+
+/**
  * Validates `Authorization: Bearer <access token>` and attaches `req.user`.
  */
 async function authenticate(req, _res, next) {
@@ -29,6 +49,7 @@ async function authenticate(req, _res, next) {
     if (!header?.startsWith('Bearer ')) throw ApiError.unauthorized('No token provided', 'NO_TOKEN');
 
     const user = await userFromAccessToken(header.slice(7));
+    if (isDemo(user) && demoBlocked(req)) throw ApiError.forbidden('This is switched off in the demo account', 'DEMO_RESTRICTED');
     req.user = user;
     next();
   } catch (err) {
