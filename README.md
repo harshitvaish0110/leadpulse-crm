@@ -28,7 +28,9 @@ Every change the AI suggests waits for a person to approve it.
 
 ![My Day: the briefing, overdue tasks and next best actions for a sales rep](.github/assets/my-day.png)
 
-> **About the live app:** it runs on free hosting tiers, so the first request after a quiet spell can take about a minute while the servers wake up. Accounts are invite-only. To explore with the demo accounts, run it locally; it takes about five minutes.
+> **Try the live app:** sign in at [leadpulse-crm.vercel.app](https://leadpulse-crm.vercel.app) with **`sarah@leadpulse.dev`** and the password **`LeadPulse2026`**. Sarah is a sales rep with a full book of deals. It's a shared public account, so deleting records, uploading files, sending email and changing the password are switched off.
+>
+> The app runs on free hosting tiers, so the first request after a quiet spell can take about a minute while the servers wake up. For every role and feature, run it locally; that takes about five minutes.
 
 ## Why LeadPulse?
 
@@ -96,6 +98,7 @@ The demo workspace is synthetic and deterministic: 40 companies, 300 contacts, 4
 |---|---|
 | **Roles** | `ADMIN`, `MANAGER` and `SALES_REP`. Reps see their own contacts and deals; managers and admins see everyone's. Companies are shared. |
 | **Invites** | Invite-only sign-up with copyable invite links; the first admin is set by email. |
+| **Public demo account** | Mark any login as a public demo with `DEMO_ACCOUNT_EMAILS`. Visitors can explore and edit, but can't delete, hand records to another owner, upload files, send email or change the account. |
 | **Integrations** | Paste API keys in Settings (stored encrypted) and test each connection. Keys in `.env` take precedence. |
 | **Webhooks** | Signed `contact.created`, `deal.stage_changed` and `task.overdue` events, retried with backoff. |
 | **Audit log** | Settings, users and invites, integrations, webhooks, custom fields, contact deletions and bulk changes, enrichment, and every AI approval are recorded with before and after snapshots. The database itself rejects edits to the log. |
@@ -291,7 +294,7 @@ In production the API refuses to start without `JWT_SECRET`, `ML_SERVICE_TOKEN`,
 **Lessons from running it on free tiers:**
 - Keep `DB_POOL_MAX` at 5 or less, because Supabase's free session pooler admits 15 clients by default.
 - The client keeps retrying while a sleeping API wakes up, instead of showing an empty page.
-- Change the seeded demo passwords as soon as the API is public.
+- Change the seeded demo passwords as soon as the API is public. If you share a login, list it in `DEMO_ACCOUNT_EMAILS`.
 
 ## Configuration
 
@@ -308,6 +311,7 @@ Every setting is listed, with comments, in [`.env.example`](.env.example). The o
 | `STORAGE_DRIVER`, `SUPABASE_*` | `local` disk or a private Supabase Storage bucket. |
 | `EMAIL_DRIVER`, `RESEND_API_KEY` | `ethereal` (test inbox), `smtp` or `resend`. |
 | `BOOTSTRAP_ADMIN_EMAIL`, `ALLOW_SIGNUP` | Who becomes the first admin, and whether open sign-up is allowed (off by default). |
+| `DEMO_ACCOUNT_EMAILS` | Logins shared publicly as demos, with deletes, uploads, email sending and account changes switched off. |
 
 ## Development and checks
 
@@ -348,7 +352,3 @@ These are future directions, not features that already exist.
 Bug reports and ideas are welcome in [Issues](https://github.com/harshitvaish0110/leadpulse-crm/issues). Include the steps to reproduce and what you expected.
 
 Pull requests should include tests and explain what changed and why. Please don't post API keys, tokens or real customer data in issues or pull requests.
-
-## License
-
-MIT
