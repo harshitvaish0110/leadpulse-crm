@@ -52,6 +52,9 @@ const picks = (v, allowed) => {
   return list.length ? [...new Set(list)] : undefined;
 };
 const word = (v, max = 60) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+// "My deals" comes back as owner "me" (or "myself", …): the caller, not someone with "me" in their name.
+const SELF = new Set(['me', 'my', 'mine', 'myself', 'i', 'self', 'user', 'the user', 'current user']);
+const ownerParam = (v) => { const w = word(v); return w && SELF.has(w.toLowerCase()) ? 'me' : w; };
 const choice = (v, allowed, fallback) => (allowed.includes(v) ? v : fallback);
 const compact = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
 
@@ -73,7 +76,7 @@ function checkQuery(raw) {
         maxWinProbability: num(raw.maxWinProbability, 0, 1),
         stalledDays: num(raw.stalledDays, 1, 3650),
         company: word(raw.company),
-        owner: word(raw.owner),
+        owner: ownerParam(raw.owner),
         sort: choice(raw.sort, ['value', 'closeDate', 'winProbability', 'stalled'], 'value'),
         limit,
       });
@@ -88,7 +91,7 @@ function checkQuery(raw) {
         noContactDays: num(raw.noContactDays, 1, 3650),
         tag: word(raw.tag, 40),
         company: word(raw.company),
-        owner: word(raw.owner),
+        owner: ownerParam(raw.owner),
         sort: choice(raw.sort, ['leadScore', 'churnRisk', 'sentiment', 'newest'], 'leadScore'),
         limit,
       });
@@ -99,7 +102,7 @@ function checkQuery(raw) {
         priorities: picks(raw.priorities ?? raw.priority, PRIORITIES),
         mine: raw.mine === true ? true : undefined,
         company: word(raw.company),
-        owner: word(raw.owner),
+        owner: ownerParam(raw.owner),
         limit,
       });
     case 'pipeline_summary':
@@ -110,7 +113,7 @@ function checkQuery(raw) {
         closeFrom: date(raw.closeFrom),
         closeTo: date(raw.closeTo),
         company: word(raw.company),
-        owner: word(raw.owner),
+        owner: ownerParam(raw.owner),
       });
     default:
       return null;
@@ -122,9 +125,10 @@ const checkPlan = (plan) => (Array.isArray(plan?.queries) ? plan.queries.map(che
 
 // ── Running them ───────────────────────────────────────────────────────────────
 
-/** Ids of users whose name contains `owner` (null when no owner filter). */
-async function ownerIds(owner) {
+/** Ids of users whose name contains `owner`, or the caller for "me" (null when no owner filter). */
+async function ownerIds(owner, user) {
   if (!owner) return null;
+  if (owner === 'me') return [user.id];
   const terms = owner.split(/\s+/).filter(Boolean);
   const users = await prisma.user.findMany({
     where: { AND: terms.map((t) => ({ OR: [{ firstName: { contains: t, mode: 'insensitive' } }, { lastName: { contains: t, mode: 'insensitive' } }] })) },
@@ -154,7 +158,7 @@ function describe(q) {
   if (q.priorities) bits.push(`priority ${q.priorities.join(' or ')}`);
   if (q.mine) bits.push('assigned to the user');
   if (q.company) bits.push(`at a company whose name contains "${q.company}"`);
-  if (q.owner) bits.push(`owned by "${q.owner}"`);
+  if (q.owner) bits.push(q.owner === 'me' ? 'owned by the user' : `owned by "${q.owner}"`);
   return bits.length ? ` ${bits.join(', ')}` : '';
 }
 
@@ -165,7 +169,7 @@ const header = (q, text) => ({ recordType: 'query', recordId: q.tool, content: `
 const listed = (shown, total, order) => (shown ? `The ${shown === total ? `${shown}` : `first ${shown} of the ${total}`} listed next are sorted by ${order}.` : 'None match.');
 
 async function runDeals(user, q, ctx) {
-  const owners = await ownerIds(q.owner);
+  const owners = await ownerIds(q.owner, user);
   const closedBy = q.status === 'won' || q.status === 'lost' ? 'closedAt' : 'expectedCloseDate';
   const stage = q.stages ?? { open: OPEN, won: ['CLOSED_WON'], lost: ['CLOSED_LOST'], any: STAGES }[q.status];
   const where = scoped(user, 'deal', compact({
@@ -208,7 +212,7 @@ async function runDeals(user, q, ctx) {
 }
 
 async function runContacts(user, q, ctx) {
-  const owners = await ownerIds(q.owner);
+  const owners = await ownerIds(q.owner, user);
   const where = scoped(user, 'contact', compact({
     status: q.statuses ? { in: q.statuses } : undefined,
     leadScoreLabel: q.scoreLabels ? { in: q.scoreLabels } : undefined,
@@ -244,7 +248,7 @@ async function runContacts(user, q, ctx) {
 }
 
 async function runTasks(user, q, ctx) {
-  const owners = await ownerIds(q.owner);
+  const owners = await ownerIds(q.owner, user);
   const today = startOfDay(ctx.now, ctx.tz);
   const tomorrow = dayBoundary(localDate(ctx.now, ctx.tz), ctx.tz, { end: true });
   const dueDate = {
@@ -279,7 +283,7 @@ async function runTasks(user, q, ctx) {
 }
 
 async function runSummary(user, q, ctx) {
-  const owners = await ownerIds(q.owner);
+  const owners = await ownerIds(q.owner, user);
   const closedBy = q.status === 'open' ? 'expectedCloseDate' : 'closedAt';
   const deals = await prisma.deal.findMany({
     where: scoped(user, 'deal', compact({
