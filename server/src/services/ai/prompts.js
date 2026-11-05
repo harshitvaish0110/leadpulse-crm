@@ -361,7 +361,7 @@ ${clip(question, 1000)}
 Tools and their optional parameters:
 - deals: status open|won|lost|any (default open), stages [LEAD|CONTACTED|DEMO|PROPOSAL|NEGOTIATION|CLOSED_WON|CLOSED_LOST], minValue, maxValue,
   closeFrom, closeTo (expected close date for open deals, close date for won/lost), minWinProbability, maxWinProbability (0-1),
-  stalledDays (no stage change for N days), company, owner (a person's name), sort value|closeDate|winProbability|stalled, limit (max 10)
+  stalledDays (no stage change for N days), company, owner (a person's name, or "me" for the user's own), sort value|closeDate|winProbability|stalled, limit (max 10)
 - contacts: statuses [LEAD|ACTIVE|INACTIVE|CHURNED], scoreLabels [HOT|WARM|COLD], minLeadScore (0-120), minChurnRisk (0-1), maxSentiment (0-1),
   noContactDays (no activity for N days), tag, company, owner, sort leadScore|churnRisk|sentiment|newest, limit (max 10)
 - tasks: due overdue|today|week|any, priorities [LOW|MEDIUM|HIGH], mine (true = assigned to the user), company, owner, limit (max 10)

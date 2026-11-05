@@ -77,6 +77,14 @@ test('structured queries only ever see the caller\'s deals', async () => {
   assert.match(records[0].content, new RegExp(`: ${allowed.size} match`), 'the header counts the whole book, not just the listed rows');
 });
 
+test('"my deals" (owner "me") means the caller\'s own deals', async () => {
+  const [query] = crmQueries.checkPlan({ queries: [{ tool: 'deals', status: 'any', owner: 'me' }] });
+  const rows = (await crmQueries.runQueries(sarah.user, [query], { tz: workspace().timezone })).filter((r) => r.fromQuery);
+  const owners = await prisma.deal.findMany({ where: { id: { in: rows.map((r) => r.recordId) } }, select: { ownerId: true } });
+  assert.ok(rows.length > 0, 'not an empty search for someone called "me"');
+  assert.ok(owners.every((d) => d.ownerId === sarah.user.id));
+});
+
 test('the assistant answers "deals over 100k" from a database query and links those deals', async () => {
   const { sources, done } = await ask(sarah, 'Which deals over 100k should I focus on?');
   assert.ok(done, 'the stream finished');

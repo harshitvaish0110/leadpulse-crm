@@ -18,6 +18,8 @@ test('query parameters are checked per tool', () => {
   assert.deepEqual(checkQuery({ tool: 'tasks', due: 'yesterday', mine: 'yes', priority: 'high' }), { tool: 'tasks', due: 'any', priorities: ['HIGH'], limit: 10 });
   assert.deepEqual(checkQuery({ tool: 'pipeline_summary', groupBy: 'colour' }), { tool: 'pipeline_summary', groupBy: 'stage', status: 'open' });
   assert.deepEqual(checkQuery({ tool: 'contacts', company: '  Block Group ' }), { tool: 'contacts', company: 'Block Group', sort: 'leadScore', limit: 10 });
+  for (const self of ['me', 'Myself', 'MINE']) assert.equal(checkQuery({ tool: 'deals', owner: self }).owner, 'me', self);
+  assert.equal(checkQuery({ tool: 'deals', owner: 'Mehta' }).owner, 'Mehta', 'a real name stays a name');
 });
 
 test('only questions that filter, rank or count records cost a planning call', () => {
